@@ -72,30 +72,42 @@ async def stats(interaction: discord.Interaction, mcid: str):
     except Exception as e:
         await interaction.followup.send(f"⚠️ エラー: {e}")
 
-@tree.command(name="history", description="MCIDの変更履歴を確認します")
+@tree.command(name="history", description="MCIDの変更履歴をすべて表示します")
 async def history(interaction: discord.Interaction, mcid: str):
     await interaction.response.defer()
     try:
+        # 1. UUIDを取得
         u_res = requests.get(f"https://api.mojang.com/users/profiles/minecraft/{mcid}")
         if u_res.status_code != 200:
             await interaction.followup.send("❌ プレイヤーが見つかりませんでした。")
             return
         uuid = u_res.json()['id']
+
+        # 2. 名前履歴を取得
         h_res = requests.get(f"https://api.ashcon.app/mojang/v2/user/{uuid}")
         data = h_res.json()
 
         if "username_history" in data:
             history_list = data["username_history"]
-            embed = discord.Embed(title=f"{mcid} の名前変更履歴", color=0x3498db)
-            description = ""
+            embed = discord.Embed(
+                title=f"📜 {mcid} のID変更履歴", 
+                description=f"UUID: `{uuid}`",
+                color=0x3498db
+            )
+            
+            lines = []
+            # reversed() を使って新しい順に表示
             for entry in reversed(history_list):
                 name = entry['username']
                 if 'changed_at' in entry:
+                    # 日付を読みやすく整形
                     date = entry['changed_at'][:10].replace("-", "/")
-                    description += f"• **{name}** ({date})\n"
+                    lines.append(f"📅 `{date}` ➔ **{name}**")
                 else:
-                    description += f"• **{name}** (最初のID)\n"
-            embed.description = description
+                    lines.append(f"🌱 `最初のID` ➔ **{name}**")
+            
+            # 履歴をまとめて表示
+            embed.add_field(name="変更日 ➔ 名前", value="\n".join(lines), inline=False)
             await interaction.followup.send(embed=embed)
         else:
             await interaction.followup.send("❌ 履歴が見つかりませんでした。")
