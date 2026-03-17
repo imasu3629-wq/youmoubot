@@ -3,6 +3,8 @@ from discord import app_commands
 import requests
 from bs4 import BeautifulSoup
 import os
+import io
+from PIL import Image, ImageDraw, ImageFont
 from flask import Flask
 from threading import Thread
 from database import (
@@ -85,6 +87,69 @@ def fetch_hypixel_stats(uuid: str):
     return star, fkdr, rank_label
 
 
+# --- ランキング画像生成 ---
+FONT_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "Minecraftia.ttf")
+
+def get_rank_color(fkdr: float):
+    if fkdr >= 2000: return (255, 85, 85)    # 赤
+    if fkdr >= 1000: return (255, 85, 255)   # ピンク
+    if fkdr >= 100:  return (255, 170, 0)    # 金
+    if fkdr >= 10:   return (85, 255, 85)    # 緑
+    if fkdr >= 4:    return (85, 255, 255)   # 水色
+    if fkdr >= 2:    return (255, 255, 85)   # 黄
+    return (170, 170, 170)                   # グレー
+
+def build_ranking_image(rows, mode: str) -> io.BytesIO:
+    W, ROW_H, PADDING = 700, 52, 16
+    H = PADDING * 2 + ROW_H * max(len(rows), 1) + 60
+    img = Image.new("RGBA", (W, H), (15, 15, 20, 255))
+    draw = ImageDraw.Draw(img)
+
+    # フォント
+    try:
+        font_title = ImageFont.truetype(FONT_PATH, 22)
+        font_main  = ImageFont.truetype(FONT_PATH, 18)
+        font_small = ImageFont.truetype(FONT_PATH, 14)
+    except Exception:
+        font_title = font_main = font_small = ImageFont.load_default()
+
+    # タイトル
+    title = "FKDR Ranking TOP10" if mode == "fkdr" else "Star Ranking TOP10"
+    draw.text((PADDING, PADDING), title, font=font_title, fill=(255, 215, 0))
+
+    medals = ["1st", "2nd", "3rd"]
+    y = PADDING + 48
+
+    for i, r in enumerate(rows):
+        # 行背景（交互）
+        bg = (25, 25, 35) if i % 2 == 0 else (20, 20, 28)
+        draw.rectangle([(0, y - 6), (W, y + ROW_H - 10)], fill=bg)
+
+        # 順位
+        rank_text = medals[i] if i < 3 else f"{i+1}."
+        rank_color = [(255, 215, 0), (192, 192, 192), (205, 127, 50)][i] if i < 3 else (150, 150, 150)
+        draw.text((PADDING, y), rank_text, font=font_small, fill=rank_color)
+
+        # MCID
+        draw.text((80, y), r["mcid"], font=font_main, fill=(255, 255, 255))
+
+        # スコア（右側）
+        if mode == "fkdr":
+            score_text = f"FKDR: {r['fkdr']}"
+            color = get_rank_color(r["fkdr"])
+        else:
+            score_text = f"Star: {r['star']}"
+            color = (255, 215, 0)
+        draw.text((W - 200, y), score_text, font=font_main, fill=color)
+
+        y += ROW_H
+
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    buf.seek(0)
+    return buf
+
+
 # --- ランキング選択View（最初に表示） ---
 class RankingSelectView(discord.ui.View):
     def __init__(self):
@@ -93,14 +158,14 @@ class RankingSelectView(discord.ui.View):
     @discord.ui.button(label="⚔️ FKDR順", style=discord.ButtonStyle.primary)
     async def fkdr_ranking(self, interaction: discord.Interaction, button: discord.ui.Button):
         rows = get_ranking_by_fkdr()
-        embed = build_ranking_embed(rows, "fkdr")
-        await interaction.response.edit_message(content=None, embed=embed, view=RankingBackView())
+        buf = build_ranking_image(rows, "fkdr")
+        await interaction.response.edit_message(content=None, attachments=[discord.File(buf, filename="ranking.png")], view=RankingBackView())
 
     @discord.ui.button(label="⭐ スター順", style=discord.ButtonStyle.secondary)
     async def star_ranking(self, interaction: discord.Interaction, button: discord.ui.Button):
         rows = get_ranking_by_star()
-        embed = build_ranking_embed(rows, "star")
-        await interaction.response.edit_message(content=None, embed=embed, view=RankingBackView())
+        buf = build_ranking_image(rows, "star")
+        await interaction.response.edit_message(content=None, attachments=[discord.File(buf, filename="ranking.png")], view=RankingBackView())
 
 
 # --- ランキング表示後の戻るView ---
@@ -113,6 +178,7 @@ class RankingBackView(discord.ui.View):
         await interaction.response.edit_message(
             content="📊 どちらのランキングを表示しますか？",
             embed=None,
+            attachments=[],
             view=RankingSelectView()
         )
 
