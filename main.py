@@ -8,7 +8,8 @@ from threading import Thread
 from database import (
     init_db, get_cached_uuid, save_uuid_cache,
     register_player, update_stats, is_registered, is_registered_by_discord,
-    get_registered_by_discord, get_ranking_by_fkdr, get_ranking_by_star
+    get_registered_by_discord, get_ranking_by_fkdr, get_ranking_by_star,
+    delete_player
 )
 
 # --- 24時間稼働設定 ---
@@ -279,6 +280,8 @@ async def stats(interaction: discord.Interaction, mcid: str):
             await interaction.followup.send("❌ Hypixelにデータがありません。")
             return
         comment = fkdr_comment(fkdr)
+        if mcid.lower() == "youmouop":
+            rank_label = "[YOUMOU]"
         display_name = f"{rank_label} {mcid}" if rank_label else mcid
         embed = discord.Embed(title=f"{display_name} の戦績", color=0x00ff00)
         embed.add_field(name="⭐ Star", value=str(star), inline=True)
@@ -353,6 +356,27 @@ async def history(interaction: discord.Interaction, mcid: str):
             await interaction.followup.send(f"ℹ️ {mcid} の履歴データが見つかりませんでした。")
     except Exception as e:
         await interaction.followup.send("⚠️ 履歴取得中にエラーが発生しました。")
+
+# --- /delete ---
+@tree.command(name="delete", description="登録したMCIDをランキングから削除します")
+async def delete(interaction: discord.Interaction, mcid: str):
+    await interaction.response.defer(ephemeral=True)
+    try:
+        uuid = fetch_uuid(mcid)
+        if not uuid:
+            await interaction.followup.send("❌ プレイヤーが見つかりません。", ephemeral=True)
+            return
+        if not is_registered_by_discord(interaction.user.id, uuid):
+            await interaction.followup.send("❌ このMCIDはあなたが登録したものではありません。", ephemeral=True)
+            return
+        success = delete_player(interaction.user.id, uuid)
+        if success:
+            await interaction.followup.send(f"🗑️ `{mcid}` をランキングから削除しました。", ephemeral=True)
+        else:
+            await interaction.followup.send("❌ 削除に失敗しました。", ephemeral=True)
+    except Exception as e:
+        await interaction.followup.send(f"⚠️ エラー: {e}", ephemeral=True)
+
 
 # --- /setkey（既存） ---
 @tree.command(name="setkey", description="APIキーを更新")
