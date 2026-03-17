@@ -171,7 +171,7 @@ async def register(interaction: discord.Interaction, mcid: str):
             await interaction.followup.send(f"⚠️ `{mcid}` はすでに登録されています。", ephemeral=True)
             return
 
-        star, fkdr = fetch_hypixel_stats(uuid)
+        star, fkdr, _ = fetch_hypixel_stats(uuid)
         if star is None:
             await interaction.followup.send("❌ Hypixelからデータを取得できませんでした。", ephemeral=True)
             return
@@ -223,7 +223,7 @@ async def refresh(interaction: discord.Interaction, mcid: str):
             await interaction.followup.send("❌ このMCIDはあなたが登録したものではありません。", ephemeral=True)
             return
 
-        star, fkdr = fetch_hypixel_stats(uuid)
+        star, fkdr, _ = fetch_hypixel_stats(uuid)
         if star is None:
             await interaction.followup.send("❌ Hypixelからデータを取得できませんでした。", ephemeral=True)
             return
