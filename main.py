@@ -38,17 +38,43 @@ tree = app_commands.CommandTree(bot)
 
 
 # --- UUID取得ヘルパー（キャッシュ付き） ---
-def fetch_uuid(mcid: str):
-    cached = get_cached_uuid(mcid)
-    if cached:
-        return cached
-    res = requests.get(f"https://api.mojang.com/users/profiles/minecraft/{mcid}")
+def fetch_current_name(uuid: str):
+    res = requests.get(f"https://sessionserver.mojang.com/session/minecraft/profile/{uuid}")
     if res.status_code != 200:
         return None
-    uuid = res.json().get('id')
-    if uuid:
-        save_uuid_cache(mcid, uuid)
-    return uuid
+    return res.json().get("name")
+
+
+def fetch_player_profile(mcid: str):
+    normalized_mcid = mcid.strip()
+    if not normalized_mcid:
+        return None
+
+    cached_uuid = get_cached_uuid(normalized_mcid)
+    if cached_uuid:
+        official_name = fetch_current_name(cached_uuid)
+        return {"uuid": cached_uuid, "name": official_name or normalized_mcid}
+
+    res = requests.get(f"https://api.mojang.com/users/profiles/minecraft/{normalized_mcid}")
+    if res.status_code != 200:
+        return None
+
+    data = res.json()
+    uuid = data.get("id")
+    official_name = data.get("name")
+    if not uuid:
+        return None
+
+    save_uuid_cache(normalized_mcid, uuid)
+    if official_name and official_name.lower() != normalized_mcid.lower():
+        save_uuid_cache(official_name, uuid)
+
+    return {"uuid": uuid, "name": official_name or normalized_mcid}
+
+
+def fetch_uuid(mcid: str):
+    profile = fetch_player_profile(mcid)
+    return profile["uuid"] if profile else None
 
 
 # --- Hypixel ランク取得ヘルパー ---
@@ -228,13 +254,16 @@ async def on_ready():
 async def register(interaction: discord.Interaction, mcid: str):
     await interaction.response.defer(ephemeral=True)
     try:
-        uuid = fetch_uuid(mcid)
-        if not uuid:
+        profile = fetch_player_profile(mcid)
+        if not profile:
             await interaction.followup.send("❌ プレイヤーが見つかりません。MCIDを確認してください。", ephemeral=True)
             return
 
+        uuid = profile["uuid"]
+        official_mcid = profile["name"]
+
         if is_registered(uuid):
-            await interaction.followup.send(f"⚠️ `{mcid}` はすでに登録されています。", ephemeral=True)
+            await interaction.followup.send(f"⚠️ `{official_mcid}` はすでに登録されています。", ephemeral=True)
             return
 
         star, fkdr, _ = fetch_hypixel_stats(uuid)
@@ -242,10 +271,10 @@ async def register(interaction: discord.Interaction, mcid: str):
             await interaction.followup.send("❌ Hypixelからデータを取得できませんでした。", ephemeral=True)
             return
 
-        register_player(uuid, mcid, interaction.user.id, star, fkdr)
+        register_player(uuid, official_mcid, interaction.user.id, star, fkdr)
 
         embed = discord.Embed(title="✅ 登録完了", color=0x2ecc71)
-        embed.add_field(name="MCID", value=mcid, inline=True)
+        embed.add_field(name="MCID", value=official_mcid, inline=True)
         embed.add_field(name="⭐ Star", value=str(star), inline=True)
         embed.add_field(name="⚔️ FKDR", value=str(fkdr), inline=True)
         embed.set_footer(text="ランキングに反映されました")
@@ -280,10 +309,13 @@ async def registered(interaction: discord.Interaction):
 async def refresh(interaction: discord.Interaction, mcid: str):
     await interaction.response.defer(ephemeral=True)
     try:
-        uuid = fetch_uuid(mcid)
-        if not uuid:
+        profile = fetch_player_profile(mcid)
+        if not profile:
             await interaction.followup.send("❌ プレイヤーが見つかりません。", ephemeral=True)
             return
+
+        uuid = profile["uuid"]
+        official_mcid = profile["name"]
 
         if not is_registered_by_discord(interaction.user.id, uuid):
             await interaction.followup.send("❌ このMCIDはあなたが登録したものではありません。", ephemeral=True)
@@ -294,11 +326,10 @@ async def refresh(interaction: discord.Interaction, mcid: str):
             await interaction.followup.send("❌ Hypixelからデータを取得できませんでした。", ephemeral=True)
             return
 
-        # 最新MCIDも更新（名前変更対応）
-        update_stats(uuid, mcid, star, fkdr)
+        update_stats(uuid, official_mcid, star, fkdr)
 
         embed = discord.Embed(title="🔄 戦績を更新しました", color=0x9b59b6)
-        embed.add_field(name="MCID", value=mcid, inline=True)
+        embed.add_field(name="MCID", value=official_mcid, inline=True)
         embed.add_field(name="⭐ Star", value=str(star), inline=True)
         embed.add_field(name="⚔️ FKDR", value=str(fkdr), inline=True)
         await interaction.followup.send(embed=embed, ephemeral=True)
