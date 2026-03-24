@@ -10,7 +10,7 @@ REQUEST_TIMEOUT = 10
 HEAD_CACHE_DIR = os.path.join("cache", "skins")
 DEFAULT_FONT_PATH = os.environ.get(
     "RANKING_FONT_PATH",
-    os.path.join(os.path.dirname(os.path.abspath(__file__)), "Minecraftia.ttf"),
+    os.path.join(os.path.dirname(os.path.abspath(__file__)), "Thesignature.ttf"),
 )
 
 PRESTIGE_STYLES = {
@@ -116,11 +116,10 @@ def _get_prestige_style(star: int) -> dict[str, Any]:
     return PRESTIGE_STYLES.get(tier, PRESTIGE_STYLES[100])
 
 
-def _draw_badge(draw: ImageDraw.ImageDraw, x: int, y: int, star: int, font: ImageFont.ImageFont):
+def get_badge_parts(star: int) -> list[tuple[str, str]]:
     style = _get_prestige_style(star)
     star_text = str(max(star, 0))
 
-    cursor_x = x
     parts = [
         ("[", style["leftBracket"]),
     ]
@@ -136,8 +135,41 @@ def _draw_badge(draw: ImageDraw.ImageDraw, x: int, y: int, star: int, font: Imag
             ("]", style["rightBracket"]),
         ]
     )
+    return parts
 
-    for text, color in parts:
+
+def _hex_to_ansi_color(hex_color: str) -> int:
+    color_map = {
+        "#000000": 30,
+        "#AA0000": 31,
+        "#00AA00": 32,
+        "#FFAA00": 33,
+        "#0000AA": 34,
+        "#AA00AA": 35,
+        "#00AAAA": 36,
+        "#AAAAAA": 37,
+        "#555555": 90,
+        "#FF5555": 91,
+        "#55FF55": 92,
+        "#FFFF55": 93,
+        "#5555FF": 94,
+        "#FF55FF": 95,
+        "#55FFFF": 96,
+        "#FFFFFF": 97,
+    }
+    return color_map.get(hex_color.upper(), 37)
+
+
+def render_badge_ansi(star: int) -> str:
+    colored = "".join(
+        f"\u001b[{_hex_to_ansi_color(color)}m{text}" for text, color in get_badge_parts(star)
+    )
+    return f"{colored}\u001b[0m"
+
+
+def _draw_badge(draw: ImageDraw.ImageDraw, x: int, y: int, star: int, font: ImageFont.ImageFont):
+    cursor_x = x
+    for text, color in get_badge_parts(star):
         draw.text((cursor_x, y), text, font=font, fill=color)
         bbox = draw.textbbox((cursor_x, y), text, font=font)
         cursor_x += bbox[2] - bbox[0]

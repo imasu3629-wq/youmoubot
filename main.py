@@ -16,19 +16,23 @@ from database import (
     get_config_value,
     get_player_by_discord,
     get_player_by_uuid,
+    get_player_by_username,
+    get_player_stats_by_uuid,
     get_top_player_stats,
     init_db,
     register_verified_player,
     save_uuid_cache,
     set_config_value,
+    update_player_uuid,
     upsert_player_stats,
 )
-from ranking_renderer import RankingRenderError, render_ranking_image
+from ranking_renderer import RankingRenderError, render_badge_ansi, render_ranking_image
 
 REQUEST_TIMEOUT = 10
 HYPIXEL_PLAYER_URL = "https://api.hypixel.net/v2/player"
 MOJANG_PROFILE_URL = "https://api.mojang.com/users/profiles/minecraft/{mcid}"
 SESSION_PROFILE_URL = "https://sessionserver.mojang.com/session/minecraft/profile/{uuid}"
+CRAFATAR_HEAD_URL = "https://crafatar.com/avatars/{uuid}?size=64&overlay"
 AUTHORIZED_USERS = [1278574483195559977]
 
 # --- 24時間稼働設定 ---
@@ -174,6 +178,59 @@ def _safe_ratio(numerator: int, denominator: int) -> float:
 def _sanitize_filename(value: str) -> str:
     cleaned = re.sub(r"[^a-zA-Z0-9_-]+", "_", value.strip().lower())
     return cleaned or "ranking"
+
+
+def _download_head_to_cache(uuid: str) -> bool:
+    if not uuid:
+        return False
+
+    cache_dir = os.path.join("cache", "skins")
+    os.makedirs(cache_dir, exist_ok=True)
+    cache_path = os.path.join(cache_dir, f"{uuid}.png")
+
+    response = requests.get(CRAFATAR_HEAD_URL.format(uuid=uuid), timeout=REQUEST_TIMEOUT)
+    if response.status_code != 200:
+        return False
+
+    with open(cache_path, "wb") as fp:
+        fp.write(response.content)
+    return True
+
+
+def refresh_player_identity(mcid_or_uuid: str) -> Optional[str]:
+    target = mcid_or_uuid.strip()
+    if not target:
+        return None
+
+    is_uuid_format = False
+    compact = target.replace("-", "").lower()
+    if len(compact) == 32 and all(ch in "0123456789abcdef" for ch in compact):
+        is_uuid_format = True
+
+    if is_uuid_format:
+        current_name = fetch_current_name(compact)
+        if not current_name:
+            return compact
+        profile = fetch_player_profile(current_name)
+    else:
+        profile = fetch_player_profile(target)
+
+    if not profile:
+        return None
+
+    new_uuid = profile["uuid"]
+    new_name = profile["name"]
+    save_uuid_cache(target, new_uuid)
+    if new_name:
+        save_uuid_cache(new_name, new_uuid)
+
+    existing = get_player_by_uuid(target) if is_uuid_format else get_player_by_username(target)
+
+    if existing and existing["minecraft_uuid"] != new_uuid:
+        update_player_uuid(existing["minecraft_uuid"], new_uuid, new_name)
+
+    _download_head_to_cache(new_uuid)
+    return new_uuid
 
 
 def fetch_and_store_player_stats(uuid: str):
@@ -541,7 +598,8 @@ async def update(interaction: discord.Interaction, mcid_or_all: str):
             failed = 0
             for player in players:
                 try:
-                    fetch_and_store_player_stats(player["minecraft_uuid"])
+                    refreshed_uuid = refresh_player_identity(player["minecraft_uuid"]) or player["minecraft_uuid"]
+                    fetch_and_store_player_stats(refreshed_uuid)
                     success += 1
                 except Exception:
                     failed += 1
@@ -552,13 +610,50 @@ async def update(interaction: discord.Interaction, mcid_or_all: str):
             )
             return
 
-        uuid = resolve_target_uuid(target)
+        uuid = refresh_player_identity(target)
         if not uuid:
             await interaction.followup.send("❌ Invalid MCID / username not found.", ephemeral=True)
             return
 
         fetch_and_store_player_stats(uuid)
         await interaction.followup.send("✅ Player stats updated successfully.", ephemeral=True)
+    except VerificationError as error:
+        await interaction.followup.send(error.message, ephemeral=True)
+    except requests.RequestException:
+        await interaction.followup.send(
+            "⚠️ Network error while contacting Mojang/Hypixel services. Please try again.",
+            ephemeral=True,
+        )
+    except Exception as error:
+        await interaction.followup.send(f"⚠️ エラーが発生しました: {error}", ephemeral=True)
+
+
+@tree.command(name="stats", description="指定MCIDのBedwars StarとFKDRを表示します")
+async def stats(interaction: discord.Interaction, mcid: str):
+    await interaction.response.defer(ephemeral=True)
+
+    try:
+        uuid = resolve_target_uuid(mcid)
+        if not uuid:
+            await interaction.followup.send("❌ Invalid MCID / username not found.", ephemeral=True)
+            return
+
+        fetch_and_store_player_stats(uuid)
+        row = get_player_stats_by_uuid(uuid)
+        if not row:
+            await interaction.followup.send("ℹ️ 統計データが見つかりませんでした。", ephemeral=True)
+            return
+
+        star_value = _safe_int(row["bedwars_star"])
+        fkdr_value = float(row["fkdr"] or 0)
+
+        badge = render_badge_ansi(star_value)
+        embed = discord.Embed(title="📊 Bedwars Stats", color=0x3498DB)
+        embed.add_field(name="Player", value=str(row["minecraft_name"]), inline=False)
+        embed.add_field(name="Star Badge", value=f"```ansi\n{badge}\n```", inline=False)
+        embed.add_field(name="FKDR", value=f"{fkdr_value:.2f}", inline=True)
+        embed.add_field(name="Last Updated", value=str(row["last_updated"] or "N/A"), inline=True)
+        await interaction.followup.send(embed=embed, ephemeral=True)
     except VerificationError as error:
         await interaction.followup.send(error.message, ephemeral=True)
     except requests.RequestException:

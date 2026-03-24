@@ -149,7 +149,6 @@ def get_player_by_discord(discord_user_id: str):
         ).fetchone()
 
 
-
 def get_player_by_uuid(minecraft_uuid: str):
     with get_conn() as conn:
         return conn.execute(
@@ -157,6 +156,13 @@ def get_player_by_uuid(minecraft_uuid: str):
             (minecraft_uuid,),
         ).fetchone()
 
+
+def get_player_by_username(minecraft_username: str):
+    with get_conn() as conn:
+        return conn.execute(
+            "SELECT * FROM players WHERE lower(minecraft_username) = lower(?)",
+            (minecraft_username,),
+        ).fetchone()
 
 
 def register_verified_player(
@@ -192,7 +198,6 @@ def register_verified_player(
         )
 
 
-
 def delete_player_registration_by_discord(discord_user_id: str) -> bool:
     with get_conn() as conn:
         cursor = conn.execute(
@@ -202,7 +207,6 @@ def delete_player_registration_by_discord(discord_user_id: str) -> bool:
         return cursor.rowcount > 0
 
 
-
 def delete_player_registration_by_uuid(minecraft_uuid: str) -> bool:
     with get_conn() as conn:
         cursor = conn.execute(
@@ -210,6 +214,35 @@ def delete_player_registration_by_uuid(minecraft_uuid: str) -> bool:
             (minecraft_uuid,),
         )
         return cursor.rowcount > 0
+
+
+def update_player_uuid(old_uuid: str, new_uuid: str, minecraft_username: Optional[str] = None):
+    with get_conn() as conn:
+        if old_uuid != new_uuid:
+            conn.execute(
+                "DELETE FROM player_stats WHERE minecraft_uuid = ?",
+                (new_uuid,),
+            )
+        conn.execute(
+            """
+            UPDATE players
+            SET minecraft_uuid = ?,
+                minecraft_username = COALESCE(?, minecraft_username),
+                updated_at = datetime('now')
+            WHERE minecraft_uuid = ?
+            """,
+            (new_uuid, minecraft_username, old_uuid),
+        )
+        conn.execute(
+            """
+            UPDATE player_stats
+            SET minecraft_uuid = ?,
+                minecraft_name = COALESCE(?, minecraft_name),
+                last_updated = datetime('now')
+            WHERE minecraft_uuid = ?
+            """,
+            (new_uuid, minecraft_username, old_uuid),
+        )
 
 
 def set_config_value(key: str, value: str):
@@ -319,6 +352,23 @@ def upsert_player_stats(
                 kdr,
             ),
         )
+
+
+def get_player_stats_by_uuid(minecraft_uuid: str):
+    with get_conn() as conn:
+        return conn.execute(
+            """
+            SELECT
+                minecraft_uuid,
+                minecraft_name,
+                bedwars_star,
+                fkdr,
+                last_updated
+            FROM player_stats
+            WHERE minecraft_uuid = ?
+            """,
+            (minecraft_uuid,),
+        ).fetchone()
 
 
 def get_top_player_stats(metric: str, limit: int = 10):
