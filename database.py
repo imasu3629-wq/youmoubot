@@ -40,6 +40,37 @@ def init_db():
         conn.execute(
             "CREATE UNIQUE INDEX IF NOT EXISTS idx_players_discord_nonnull ON players(discord_user_id) WHERE discord_user_id IS NOT NULL"
         )
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS bot_config (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL,
+                updated_at TEXT DEFAULT (datetime('now'))
+            )
+        """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS player_stats (
+                minecraft_uuid TEXT PRIMARY KEY,
+                minecraft_name TEXT NOT NULL,
+                bedwars_star INTEGER NOT NULL DEFAULT 0,
+                wins INTEGER NOT NULL DEFAULT 0,
+                losses INTEGER NOT NULL DEFAULT 0,
+                final_kills INTEGER NOT NULL DEFAULT 0,
+                final_deaths INTEGER NOT NULL DEFAULT 0,
+                beds_broken INTEGER NOT NULL DEFAULT 0,
+                beds_lost INTEGER NOT NULL DEFAULT 0,
+                kills INTEGER NOT NULL DEFAULT 0,
+                deaths INTEGER NOT NULL DEFAULT 0,
+                games_played INTEGER NOT NULL DEFAULT 0,
+                winstreak INTEGER NOT NULL DEFAULT 0,
+                fkdr REAL NOT NULL DEFAULT 0,
+                wlr REAL NOT NULL DEFAULT 0,
+                kdr REAL NOT NULL DEFAULT 0,
+                last_updated TEXT DEFAULT (datetime('now'))
+            )
+        """)
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_player_stats_name ON player_stats (minecraft_name)"
+        )
 
 
 def _migrate_players_table_if_needed(conn: sqlite3.Connection):
@@ -179,3 +210,112 @@ def delete_player_registration_by_uuid(minecraft_uuid: str) -> bool:
             (minecraft_uuid,),
         )
         return cursor.rowcount > 0
+
+
+def set_config_value(key: str, value: str):
+    with get_conn() as conn:
+        conn.execute(
+            """
+            INSERT INTO bot_config (key, value, updated_at)
+            VALUES (?, ?, datetime('now'))
+            ON CONFLICT(key) DO UPDATE SET
+                value=excluded.value,
+                updated_at=datetime('now')
+            """,
+            (key, value),
+        )
+
+
+def get_config_value(key: str) -> Optional[str]:
+    with get_conn() as conn:
+        row = conn.execute(
+            "SELECT value FROM bot_config WHERE key = ?",
+            (key,),
+        ).fetchone()
+        return row["value"] if row else None
+
+
+def get_all_registered_players():
+    with get_conn() as conn:
+        return conn.execute(
+            "SELECT minecraft_uuid, minecraft_username FROM players"
+        ).fetchall()
+
+
+def upsert_player_stats(
+    minecraft_uuid: str,
+    minecraft_name: str,
+    bedwars_star: int,
+    wins: int,
+    losses: int,
+    final_kills: int,
+    final_deaths: int,
+    beds_broken: int,
+    beds_lost: int,
+    kills: int,
+    deaths: int,
+    games_played: int,
+    winstreak: int,
+    fkdr: float,
+    wlr: float,
+    kdr: float,
+):
+    with get_conn() as conn:
+        conn.execute(
+            """
+            INSERT INTO player_stats (
+                minecraft_uuid,
+                minecraft_name,
+                bedwars_star,
+                wins,
+                losses,
+                final_kills,
+                final_deaths,
+                beds_broken,
+                beds_lost,
+                kills,
+                deaths,
+                games_played,
+                winstreak,
+                fkdr,
+                wlr,
+                kdr,
+                last_updated
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+            ON CONFLICT(minecraft_uuid) DO UPDATE SET
+                minecraft_name=excluded.minecraft_name,
+                bedwars_star=excluded.bedwars_star,
+                wins=excluded.wins,
+                losses=excluded.losses,
+                final_kills=excluded.final_kills,
+                final_deaths=excluded.final_deaths,
+                beds_broken=excluded.beds_broken,
+                beds_lost=excluded.beds_lost,
+                kills=excluded.kills,
+                deaths=excluded.deaths,
+                games_played=excluded.games_played,
+                winstreak=excluded.winstreak,
+                fkdr=excluded.fkdr,
+                wlr=excluded.wlr,
+                kdr=excluded.kdr,
+                last_updated=datetime('now')
+            """,
+            (
+                minecraft_uuid,
+                minecraft_name,
+                bedwars_star,
+                wins,
+                losses,
+                final_kills,
+                final_deaths,
+                beds_broken,
+                beds_lost,
+                kills,
+                deaths,
+                games_played,
+                winstreak,
+                fkdr,
+                wlr,
+                kdr,
+            ),
+        )
