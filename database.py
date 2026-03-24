@@ -228,6 +228,21 @@ def delete_player_registration_by_uuid(minecraft_uuid: str) -> bool:
         return cursor.rowcount > 0
 
 
+def delete_registered_player_data_by_uuid(minecraft_uuid: str) -> bool:
+    with get_conn() as conn:
+        player_cursor = conn.execute(
+            "DELETE FROM players WHERE minecraft_uuid = ?",
+            (minecraft_uuid,),
+        )
+        if player_cursor.rowcount == 0:
+            return False
+        conn.execute(
+            "DELETE FROM player_stats WHERE minecraft_uuid = ?",
+            (minecraft_uuid,),
+        )
+        return True
+
+
 def update_player_uuid(old_uuid: str, new_uuid: str, minecraft_username: Optional[str] = None):
     with get_conn() as conn:
         if old_uuid != new_uuid:
@@ -407,26 +422,28 @@ def get_top_player_stats(metric: str, limit: int = 10):
         return conn.execute(
             f"""
             SELECT
-                minecraft_uuid,
-                minecraft_name,
-                bedwars_star,
-                wins,
-                losses,
-                final_kills,
-                final_deaths,
-                beds_broken,
-                beds_lost,
-                kills,
-                deaths,
-                games_played,
-                winstreak,
-                fkdr,
-                wlr,
-                kdr,
-                head_image_base64,
-                last_updated
-            FROM player_stats
-            ORDER BY COALESCE({order_column}, 0) DESC, minecraft_name ASC
+                ps.minecraft_uuid,
+                ps.minecraft_name,
+                ps.bedwars_star,
+                ps.wins,
+                ps.losses,
+                ps.final_kills,
+                ps.final_deaths,
+                ps.beds_broken,
+                ps.beds_lost,
+                ps.kills,
+                ps.deaths,
+                ps.games_played,
+                ps.winstreak,
+                ps.fkdr,
+                ps.wlr,
+                ps.kdr,
+                ps.head_image_base64,
+                ps.last_updated
+            FROM player_stats ps
+            INNER JOIN players p
+                ON p.minecraft_uuid = ps.minecraft_uuid
+            ORDER BY COALESCE(ps.{order_column}, 0) DESC, ps.minecraft_name ASC
             LIMIT ?
             """,
             (limit,),

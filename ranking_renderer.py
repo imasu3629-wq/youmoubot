@@ -13,7 +13,7 @@ HEAD_CACHE_DIR = os.path.join("cache", "skins")
 SESSION_PROFILE_URL = "https://sessionserver.mojang.com/session/minecraft/profile/{uuid}"
 DEFAULT_FONT_PATH = os.environ.get(
     "RANKING_FONT_PATH",
-    os.path.join(os.path.dirname(os.path.abspath(__file__)), "minecraftia.ttf"),
+    os.path.join(os.path.dirname(os.path.abspath(__file__)), "Minecraftia.ttf"),
 )
 
 PRESTIGE_STYLES = {
