@@ -8,7 +8,6 @@ from flask import Flask
 from sqlite3 import IntegrityError
 
 from database import (
-    delete_player_registration_by_discord,
     delete_player_registration_by_uuid,
     get_cached_uuid,
     get_player_by_discord,
@@ -188,6 +187,7 @@ def register_verified_account(discord_user: discord.abc.User, mcid: str):
             discord_user_id=discord_user.id,
             linked_discord_text=linked_discord_text,
             verification_status="verified",
+            registered_by_admin=False,
         )
     except IntegrityError:
         raise VerificationError("⚠️ Database uniqueness conflict occurred while saving the registration.")
@@ -197,6 +197,38 @@ def register_verified_account(discord_user: discord.abc.User, mcid: str):
         "minecraft_username": profile["name"],
         "linked_discord_text": linked_discord_text,
         "verification_status": "verified",
+    }
+
+
+def is_admin(user_id: int) -> bool:
+    return user_id in AUTHORIZED_USERS
+
+
+def admin_force_register_mcid(mcid: str):
+    profile = fetch_player_profile(mcid)
+    if not profile:
+        raise VerificationError("❌ Invalid MCID / username not found.")
+
+    existing_for_uuid = get_player_by_uuid(profile["uuid"])
+    if existing_for_uuid:
+        raise VerificationError("⚠️ This MCID is already registered.")
+
+    try:
+        register_verified_player(
+            minecraft_uuid=profile["uuid"],
+            minecraft_username=profile["name"],
+            discord_user_id=None,
+            linked_discord_text=None,
+            verification_status="forced_verified",
+            registered_by_admin=True,
+        )
+    except IntegrityError:
+        raise VerificationError("⚠️ This MCID is already registered.")
+
+    return {
+        "minecraft_uuid": profile["uuid"],
+        "minecraft_username": profile["name"],
+        "verification_status": "forced_verified",
     }
 
 
@@ -270,8 +302,8 @@ async def whoami(interaction: discord.Interaction):
 @tree.command(name="lookup", description="登録済みMCIDを確認します（管理者用）")
 async def lookup(interaction: discord.Interaction, mcid: str):
     await interaction.response.defer(ephemeral=True)
-    if interaction.user.id not in AUTHORIZED_USERS:
-        await interaction.followup.send("❌ 権限なし", ephemeral=True)
+    if not is_admin(interaction.user.id):
+        await interaction.followup.send("❌ You do not have permission to use this command.", ephemeral=True)
         return
 
     try:
@@ -289,58 +321,77 @@ async def lookup(interaction: discord.Interaction, mcid: str):
 
     row = get_player_by_uuid(profile["uuid"])
     if not row:
-        await interaction.followup.send("ℹ️ この MCID はまだ登録されていません。", ephemeral=True)
+        await interaction.followup.send("ℹ️ This MCID is not registered.", ephemeral=True)
         return
 
     embed = discord.Embed(title="🔍 Registration Lookup", color=0x9B59B6)
-    embed.add_field(name="MCID", value=row["minecraft_username"], inline=False)
+    embed.add_field(name="Minecraft Username", value=row["minecraft_username"], inline=False)
     embed.add_field(name="Minecraft UUID", value=row["minecraft_uuid"], inline=False)
-    embed.add_field(name="Discord User ID", value=row["discord_user_id"], inline=False)
-    embed.add_field(name="Linked Discord", value=row["linked_discord_text"] or "(none)", inline=False)
-    embed.add_field(name="Status", value=row["verification_status"], inline=False)
+    embed.add_field(name="Discord User ID", value=row["discord_user_id"] or "(none)", inline=False)
+    embed.add_field(name="Verification Status", value=row["verification_status"], inline=False)
+    embed.add_field(name="Registered At", value=row["registered_at"], inline=False)
+    embed.add_field(name="Registered By Admin", value="true" if row["registered_by_admin"] else "false", inline=False)
     await interaction.followup.send(embed=embed, ephemeral=True)
 
 
 @tree.command(name="resetverify", description="登録済みMCIDをリセットします（管理者用）")
-@app_commands.describe(discord_user_id="Discord user id", mcid="Minecraft username")
-async def resetverify(
-    interaction: discord.Interaction,
-    discord_user_id: str | None = None,
-    mcid: str | None = None,
-):
+@app_commands.describe(mcid="Minecraft username")
+async def resetverify(interaction: discord.Interaction, mcid: str):
     await interaction.response.defer(ephemeral=True)
-    if interaction.user.id not in AUTHORIZED_USERS:
-        await interaction.followup.send("❌ 権限なし", ephemeral=True)
+    if not is_admin(interaction.user.id):
+        await interaction.followup.send("❌ You do not have permission to use this command.", ephemeral=True)
         return
 
-    if not discord_user_id and not mcid:
-        await interaction.followup.send(
-            "⚠️ discord_user_id か mcid のどちらかを指定してください。",
-            ephemeral=True,
-        )
+    try:
+        profile = fetch_player_profile(mcid)
+    except VerificationError as error:
+        await interaction.followup.send(error.message, ephemeral=True)
+        return
+    except requests.RequestException:
+        await interaction.followup.send("⚠️ Mojang API への接続に失敗しました。", ephemeral=True)
         return
 
     deleted = False
-    if discord_user_id:
-        deleted = delete_player_registration_by_discord(discord_user_id) or deleted
-
-    if mcid:
-        try:
-            profile = fetch_player_profile(mcid)
-        except VerificationError as error:
-            await interaction.followup.send(error.message, ephemeral=True)
-            return
-        except requests.RequestException:
-            await interaction.followup.send("⚠️ Mojang API への接続に失敗しました。", ephemeral=True)
-            return
-        if profile:
-            deleted = delete_player_registration_by_uuid(profile["uuid"]) or deleted
+    if profile:
+        deleted = delete_player_registration_by_uuid(profile["uuid"])
 
     if not deleted:
-        await interaction.followup.send("ℹ️ 削除対象の登録は見つかりませんでした。", ephemeral=True)
+        await interaction.followup.send("ℹ️ This MCID is not registered.", ephemeral=True)
         return
 
-    await interaction.followup.send("✅ 登録をリセットしました。", ephemeral=True)
+    await interaction.followup.send("✅ Registration reset successfully.", ephemeral=True)
+
+
+@tree.command(name="add", description="管理者がMCIDを強制登録します")
+async def add(interaction: discord.Interaction, mcid: str):
+    await interaction.response.defer(ephemeral=True)
+    if not is_admin(interaction.user.id):
+        await interaction.followup.send("❌ You do not have permission to use this command.", ephemeral=True)
+        return
+
+    try:
+        result = admin_force_register_mcid(mcid)
+    except VerificationError as error:
+        await interaction.followup.send(error.message, ephemeral=True)
+        return
+    except requests.RequestException:
+        await interaction.followup.send(
+            "⚠️ Network error while contacting Mojang/Hypixel services. Please try again.",
+            ephemeral=True,
+        )
+        return
+    except Exception as error:
+        await interaction.followup.send(f"⚠️ エラーが発生しました: {error}", ephemeral=True)
+        return
+
+    embed = discord.Embed(
+        title="✅ MCID registered successfully through admin override.",
+        color=0x2ECC71,
+    )
+    embed.add_field(name="MCID", value=result["minecraft_username"], inline=False)
+    embed.add_field(name="Minecraft UUID", value=result["minecraft_uuid"], inline=False)
+    embed.add_field(name="Verification Status", value=result["verification_status"], inline=False)
+    await interaction.followup.send(embed=embed, ephemeral=True)
 
 
 keep_alive()
