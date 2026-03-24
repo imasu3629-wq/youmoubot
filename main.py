@@ -12,6 +12,7 @@ from flask import Flask
 from sqlite3 import IntegrityError
 
 from database import (
+    delete_registered_player_data_by_uuid,
     delete_player_registration_by_uuid,
     get_all_registered_players,
     get_cached_uuid,
@@ -561,6 +562,37 @@ async def add(interaction: discord.Interaction, mcid: str):
     await interaction.followup.send(embed=embed, ephemeral=True)
 
 
+@tree.command(name="delete", description="管理者が登録済みMCIDを削除します")
+async def delete(interaction: discord.Interaction, mcid: str):
+    await interaction.response.defer(ephemeral=True)
+    if not is_admin(interaction.user.id):
+        await interaction.followup.send("❌ You do not have permission to use this command.", ephemeral=True)
+        return
+
+    try:
+        profile = fetch_player_profile(mcid)
+    except VerificationError as error:
+        await interaction.followup.send(error.message, ephemeral=True)
+        return
+    except requests.RequestException:
+        await interaction.followup.send(
+            "⚠️ Network error while contacting Mojang services. Please try again.",
+            ephemeral=True,
+        )
+        return
+
+    if not profile:
+        await interaction.followup.send("❌ Invalid MCID / username not found.", ephemeral=True)
+        return
+
+    deleted = delete_registered_player_data_by_uuid(profile["uuid"])
+    if not deleted:
+        await interaction.followup.send("ℹ️ This MCID is not registered.", ephemeral=True)
+        return
+
+    await interaction.followup.send("✅ Registered MCID and related data deleted successfully.", ephemeral=True)
+
+
 @tree.command(name="updateapi", description="Hypixel API キーを更新します（管理者用）")
 async def updateapi(interaction: discord.Interaction, api_key: str):
     await interaction.response.defer(ephemeral=True)
@@ -615,6 +647,10 @@ async def update(interaction: discord.Interaction, mcid_or_all: str):
             await interaction.followup.send("❌ Invalid MCID / username not found.", ephemeral=True)
             return
 
+        if not get_player_by_uuid(uuid):
+            await interaction.followup.send("ℹ️ This MCID is not registered.", ephemeral=True)
+            return
+
         fetch_and_store_player_stats(uuid)
         await interaction.followup.send("✅ Player stats updated successfully.", ephemeral=True)
     except VerificationError as error:
@@ -630,18 +666,18 @@ async def update(interaction: discord.Interaction, mcid_or_all: str):
 
 @tree.command(name="stats", description="指定MCIDのBedwars StarとFKDRを表示します")
 async def stats(interaction: discord.Interaction, mcid: str):
-    await interaction.response.defer(ephemeral=True)
+    await interaction.response.defer()
 
     try:
         uuid = resolve_target_uuid(mcid)
         if not uuid:
-            await interaction.followup.send("❌ Invalid MCID / username not found.", ephemeral=True)
+            await interaction.followup.send("❌ Invalid MCID / username not found.")
             return
 
         fetch_and_store_player_stats(uuid)
         row = get_player_stats_by_uuid(uuid)
         if not row:
-            await interaction.followup.send("ℹ️ 統計データが見つかりませんでした。", ephemeral=True)
+            await interaction.followup.send("ℹ️ 統計データが見つかりませんでした。")
             return
 
         if not row["head_image_base64"]:
@@ -650,7 +686,7 @@ async def stats(interaction: discord.Interaction, mcid: str):
                 fetch_and_store_player_stats(uuid)
                 row = get_player_stats_by_uuid(uuid)
         if not row:
-            await interaction.followup.send("ℹ️ 統計データが見つかりませんでした。", ephemeral=True)
+            await interaction.followup.send("ℹ️ 統計データが見つかりませんでした。")
             return
 
         image_bytes = render_stats_image(row)
@@ -659,16 +695,15 @@ async def stats(interaction: discord.Interaction, mcid: str):
         badge = render_badge_ansi(_safe_int(row["bedwars_star"]))
         fkdr_value = float(row["fkdr"] or 0)
         message = f"```ansi\n{badge}\n```\nFKDR: {fkdr_value:.2f}"
-        await interaction.followup.send(content=message, file=file, ephemeral=True)
+        await interaction.followup.send(content=message, file=file)
     except VerificationError as error:
-        await interaction.followup.send(error.message, ephemeral=True)
+        await interaction.followup.send(error.message)
     except requests.RequestException:
         await interaction.followup.send(
             "⚠️ Network error while contacting Mojang/Hypixel services. Please try again.",
-            ephemeral=True,
         )
     except Exception as error:
-        await interaction.followup.send(f"⚠️ エラーが発生しました: {error}", ephemeral=True)
+        await interaction.followup.send(f"⚠️ エラーが発生しました: {error}")
 
 
 @tree.command(name="ranking", description="保存済み Bedwars 統計からランキング画像を作成します")
@@ -714,16 +749,16 @@ async def ranking(interaction: discord.Interaction, ranking_type: app_commands.C
 
 @tree.command(name="head", description="指定MCIDの最新ヘッド画像を表示します")
 async def head(interaction: discord.Interaction, mcid: str):
-    await interaction.response.defer(ephemeral=True)
+    await interaction.response.defer()
     try:
         profile = fetch_player_profile(mcid)
         if not profile:
-            await interaction.followup.send("❌ Invalid MCID / username not found.", ephemeral=True)
+            await interaction.followup.send("❌ Invalid MCID / username not found.")
             return
 
         head_image_base64 = fetch_head_base64_from_uuid(profile["uuid"])
         if not head_image_base64:
-            await interaction.followup.send("❌ ヘッド画像の取得に失敗しました。", ephemeral=True)
+            await interaction.followup.send("❌ ヘッド画像の取得に失敗しました。")
             return
 
         update_player_head_image(profile["uuid"], head_image_base64)
@@ -731,14 +766,13 @@ async def head(interaction: discord.Interaction, mcid: str):
             io.BytesIO(base64.b64decode(head_image_base64)),
             filename=f"{_sanitize_filename(profile['name'])}_head.png",
         )
-        await interaction.followup.send(file=file, ephemeral=True)
+        await interaction.followup.send(file=file)
     except requests.RequestException:
         await interaction.followup.send(
             "⚠️ Network error while contacting Mojang services. Please try again.",
-            ephemeral=True,
         )
     except Exception as error:
-        await interaction.followup.send(f"⚠️ エラーが発生しました: {error}", ephemeral=True)
+        await interaction.followup.send(f"⚠️ エラーが発生しました: {error}")
 
 
 keep_alive()
