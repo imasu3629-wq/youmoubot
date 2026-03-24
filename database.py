@@ -319,3 +319,47 @@ def upsert_player_stats(
                 kdr,
             ),
         )
+
+
+def get_top_player_stats(metric: str, limit: int = 10):
+    metric_column_map = {
+        "fkdr": "fkdr",
+        "wins": "wins",
+        "star": "bedwars_star",
+        "wlr": "wlr",
+        "kdr": "kdr",
+        "final_kills": "final_kills",
+        "beds_broken": "beds_broken",
+        "winstreak": "winstreak",
+    }
+    order_column = metric_column_map.get(metric)
+    if not order_column:
+        raise ValueError("Invalid ranking metric")
+
+    with get_conn() as conn:
+        return conn.execute(
+            f"""
+            SELECT
+                minecraft_uuid,
+                minecraft_name,
+                bedwars_star,
+                wins,
+                losses,
+                final_kills,
+                final_deaths,
+                beds_broken,
+                beds_lost,
+                kills,
+                deaths,
+                games_played,
+                winstreak,
+                fkdr,
+                wlr,
+                kdr,
+                last_updated
+            FROM player_stats
+            ORDER BY COALESCE({order_column}, 0) DESC, minecraft_name ASC
+            LIMIT ?
+            """,
+            (limit,),
+        ).fetchall()

@@ -1,4 +1,5 @@
 import os
+import re
 from threading import Thread
 from typing import Optional
 
@@ -15,12 +16,14 @@ from database import (
     get_config_value,
     get_player_by_discord,
     get_player_by_uuid,
+    get_top_player_stats,
     init_db,
     register_verified_player,
     save_uuid_cache,
     set_config_value,
     upsert_player_stats,
 )
+from ranking_renderer import RankingRenderError, render_ranking_image
 
 REQUEST_TIMEOUT = 10
 HYPIXEL_PLAYER_URL = "https://api.hypixel.net/v2/player"
@@ -166,6 +169,11 @@ def _safe_int(value) -> int:
 
 def _safe_ratio(numerator: int, denominator: int) -> float:
     return round(numerator / max(denominator, 1), 2)
+
+
+def _sanitize_filename(value: str) -> str:
+    cleaned = re.sub(r"[^a-zA-Z0-9_-]+", "_", value.strip().lower())
+    return cleaned or "ranking"
 
 
 def fetch_and_store_player_stats(uuid: str):
@@ -560,6 +568,39 @@ async def update(interaction: discord.Interaction, mcid_or_all: str):
         )
     except Exception as error:
         await interaction.followup.send(f"⚠️ エラーが発生しました: {error}", ephemeral=True)
+
+
+@tree.command(name="ranking", description="保存済み Bedwars 統計からランキング画像を作成します")
+@app_commands.describe(ranking_type="表示するランキング種別")
+@app_commands.choices(
+    ranking_type=[
+        app_commands.Choice(name="FKDR", value="fkdr"),
+        app_commands.Choice(name="Wins", value="wins"),
+        app_commands.Choice(name="Star", value="star"),
+        app_commands.Choice(name="WLR", value="wlr"),
+        app_commands.Choice(name="KDR", value="kdr"),
+        app_commands.Choice(name="Final Kills", value="final_kills"),
+        app_commands.Choice(name="Beds Broken", value="beds_broken"),
+        app_commands.Choice(name="Winstreak", value="winstreak"),
+    ]
+)
+async def ranking(interaction: discord.Interaction, ranking_type: app_commands.Choice[str]):
+    await interaction.response.defer()
+
+    try:
+        rows = get_top_player_stats(ranking_type.value, limit=10)
+        if not rows:
+            await interaction.followup.send("ℹ️ ランキングに表示できるデータがありません。先に /update を実行してください。")
+            return
+
+        image_bytes = render_ranking_image(list(rows), ranking_type.value)
+        filename = f"bedwars_{_sanitize_filename(ranking_type.value)}_ranking.png"
+        file = discord.File(image_bytes, filename=filename)
+        await interaction.followup.send(file=file)
+    except RankingRenderError:
+        await interaction.followup.send("⚠️ ランキング画像の生成に失敗しました。")
+    except Exception as error:
+        await interaction.followup.send(f"⚠️ エラーが発生しました: {error}")
 
 
 keep_alive()
