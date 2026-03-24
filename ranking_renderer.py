@@ -1,5 +1,7 @@
 import io
 import os
+import json
+import base64
 from datetime import datetime
 from typing import Any
 
@@ -8,9 +10,10 @@ from PIL import Image, ImageDraw, ImageFont
 
 REQUEST_TIMEOUT = 10
 HEAD_CACHE_DIR = os.path.join("cache", "skins")
+SESSION_PROFILE_URL = "https://sessionserver.mojang.com/session/minecraft/profile/{uuid}"
 DEFAULT_FONT_PATH = os.environ.get(
     "RANKING_FONT_PATH",
-    os.path.join(os.path.dirname(os.path.abspath(__file__)), "Minecraftia.ttf"),
+    os.path.join(os.path.dirname(os.path.abspath(__file__)), "minecraftia.ttf"),
 )
 
 PRESTIGE_STYLES = {
@@ -116,11 +119,10 @@ def _get_prestige_style(star: int) -> dict[str, Any]:
     return PRESTIGE_STYLES.get(tier, PRESTIGE_STYLES[100])
 
 
-def _draw_badge(draw: ImageDraw.ImageDraw, x: int, y: int, star: int, font: ImageFont.ImageFont):
+def get_badge_parts(star: int) -> list[tuple[str, str]]:
     style = _get_prestige_style(star)
     star_text = str(max(star, 0))
 
-    cursor_x = x
     parts = [
         ("[", style["leftBracket"]),
     ]
@@ -136,45 +138,100 @@ def _draw_badge(draw: ImageDraw.ImageDraw, x: int, y: int, star: int, font: Imag
             ("]", style["rightBracket"]),
         ]
     )
+    return parts
 
-    for text, color in parts:
+
+def _hex_to_ansi_color(hex_color: str) -> int:
+    color_map = {
+        "#000000": 30,
+        "#AA0000": 31,
+        "#00AA00": 32,
+        "#FFAA00": 33,
+        "#0000AA": 34,
+        "#AA00AA": 35,
+        "#00AAAA": 36,
+        "#AAAAAA": 37,
+        "#555555": 90,
+        "#FF5555": 91,
+        "#55FF55": 92,
+        "#FFFF55": 93,
+        "#5555FF": 94,
+        "#FF55FF": 95,
+        "#55FFFF": 96,
+        "#FFFFFF": 97,
+    }
+    return color_map.get(hex_color.upper(), 37)
+
+
+def render_badge_ansi(star: int) -> str:
+    colored = "".join(
+        f"\u001b[{_hex_to_ansi_color(color)}m{text}" for text, color in get_badge_parts(star)
+    )
+    return f"{colored}\u001b[0m"
+
+
+def _draw_badge(draw: ImageDraw.ImageDraw, x: int, y: int, star: int, font: ImageFont.ImageFont):
+    cursor_x = x
+    for text, color in get_badge_parts(star):
         draw.text((cursor_x, y), text, font=font, fill=color)
         bbox = draw.textbbox((cursor_x, y), text, font=font)
         cursor_x += bbox[2] - bbox[0]
 
 
-def _download_and_cache_head(uuid: str) -> str | None:
+def _extract_head_from_skin_bytes(skin_bytes: bytes) -> str | None:
+    try:
+        skin = Image.open(io.BytesIO(skin_bytes)).convert("RGBA")
+    except OSError:
+        return None
+
+    if skin.width < 64 or skin.height < 32:
+        return None
+
+    base_layer = skin.crop((8, 8, 16, 16)).convert("RGBA")
+    hat_layer = skin.crop((40, 8, 48, 16)).convert("RGBA")
+    base_layer.alpha_composite(hat_layer)
+
+    output = io.BytesIO()
+    base_layer.save(output, format="PNG")
+    return base64.b64encode(output.getvalue()).decode("utf-8")
+
+
+def fetch_head_base64_from_uuid(uuid: str) -> str | None:
     if not uuid:
         return None
-
-    os.makedirs(HEAD_CACHE_DIR, exist_ok=True)
-    cache_path = os.path.join(HEAD_CACHE_DIR, f"{uuid}.png")
-    if os.path.exists(cache_path):
-        return cache_path
-
     try:
-        response = requests.get(
-            f"https://crafatar.com/avatars/{uuid}?size=64&overlay",
-            timeout=REQUEST_TIMEOUT,
+        session_response = requests.get(SESSION_PROFILE_URL.format(uuid=uuid), timeout=REQUEST_TIMEOUT)
+        if session_response.status_code != 200:
+            return None
+        profile = session_response.json()
+        textures_prop = next(
+            (prop for prop in profile.get("properties", []) if prop.get("name") == "textures"),
+            None,
         )
-        if response.status_code == 200:
-            with open(cache_path, "wb") as fp:
-                fp.write(response.content)
-            return cache_path
+        if not textures_prop or not textures_prop.get("value"):
+            return None
+        decoded = base64.b64decode(textures_prop["value"]).decode("utf-8")
+        textures_payload = json.loads(decoded)
+        skin_url = (((textures_payload.get("textures") or {}).get("SKIN")) or {}).get("url")
+        if not skin_url:
+            return None
+        skin_response = requests.get(skin_url, timeout=REQUEST_TIMEOUT)
+        if skin_response.status_code != 200:
+            return None
+        return _extract_head_from_skin_bytes(skin_response.content)
     except requests.RequestException:
         return None
+    except (ValueError, json.JSONDecodeError, base64.binascii.Error):
+        return None
 
-    return None
 
-
-def _load_head_image(uuid: str) -> Image.Image:
-    head_path = _download_and_cache_head(uuid)
-    if head_path:
+def _load_head_image(head_image_base64: str | None) -> Image.Image:
+    if head_image_base64:
         try:
-            return Image.open(head_path).convert("RGBA")
-        except OSError:
+            raw = base64.b64decode(head_image_base64)
+            return Image.open(io.BytesIO(raw)).convert("RGBA")
+        except (ValueError, OSError, base64.binascii.Error):
             pass
-
     fallback = Image.new("RGBA", (64, 64), (60, 60, 60, 255))
     fallback_draw = ImageDraw.Draw(fallback)
     fallback_draw.rectangle((12, 12, 52, 52), fill=(110, 110, 110, 255))
@@ -240,7 +297,7 @@ def render_ranking_image(rows: list[Any], metric: str) -> io.BytesIO:
         draw.rounded_rectangle((30, y - 4, 970, y + 50), radius=8, fill=(18, 18, 18, 255))
         draw.text((40, y + 8), f"#{idx}", font=body_font, fill="#FFFFFF")
 
-        head = _load_head_image(str(row["minecraft_uuid"] or "")).resize((32, 32))
+        head = _load_head_image(row["head_image_base64"]).resize((32, 32))
         image.paste(head, (90, y + 5), head)
 
         name = str(row["minecraft_name"] or "Unknown")
@@ -254,6 +311,35 @@ def render_ranking_image(rows: list[Any], metric: str) -> io.BytesIO:
         draw.text((560, y + 8), value_text, font=body_font, fill="#55FFFF")
 
     draw.text((40, height - 35), _latest_timestamp(rows), font=footer_font, fill="#AAAAAA")
+
+    output = io.BytesIO()
+    image.save(output, format="PNG")
+    output.seek(0)
+    return output
+
+
+def render_stats_image(row: Any) -> io.BytesIO:
+    width = 720
+    height = 280
+    image = Image.new("RGBA", (width, height), (10, 10, 10, 255))
+    draw = ImageDraw.Draw(image)
+
+    title_font = _load_font(28)
+    body_font = _load_font(24)
+    badge_font = _load_font(32)
+    small_font = _load_font(16)
+
+    draw.rounded_rectangle((20, 20, width - 20, height - 20), radius=12, fill=(18, 18, 18, 255))
+    draw.text((40, 35), "Bedwars Stats", font=title_font, fill="#FFFFFF")
+
+    head = _load_head_image(row["head_image_base64"]).resize((96, 96), Image.Resampling.NEAREST)
+    image.paste(head, (45, 95), head)
+
+    name = str(row["minecraft_name"] or "Unknown")
+    draw.text((170, 100), f"Player: {name}", font=body_font, fill="#FFFFFF")
+    _draw_badge(draw, 170, 145, _safe_int(row["bedwars_star"]), badge_font)
+    draw.text((170, 195), f"FKDR: {_safe_float(row['fkdr']):.2f}", font=body_font, fill="#55FFFF")
+    draw.text((40, 245), f"Last Updated: {row['last_updated'] or 'N/A'}", font=small_font, fill="#AAAAAA")
 
     output = io.BytesIO()
     image.save(output, format="PNG")

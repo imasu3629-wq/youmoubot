@@ -65,9 +65,11 @@ def init_db():
                 fkdr REAL NOT NULL DEFAULT 0,
                 wlr REAL NOT NULL DEFAULT 0,
                 kdr REAL NOT NULL DEFAULT 0,
+                head_image_base64 TEXT,
                 last_updated TEXT DEFAULT (datetime('now'))
             )
         """)
+        _migrate_player_stats_table_if_needed(conn)
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_player_stats_name ON player_stats (minecraft_name)"
         )
@@ -124,6 +126,16 @@ def _migrate_players_table_if_needed(conn: sqlite3.Connection):
     conn.execute("ALTER TABLE players_new RENAME TO players")
 
 
+def _migrate_player_stats_table_if_needed(conn: sqlite3.Connection):
+    columns = conn.execute("PRAGMA table_info(player_stats)").fetchall()
+    if not columns:
+        return
+    has_head_column = any(col["name"] == "head_image_base64" for col in columns)
+    if has_head_column:
+        return
+    conn.execute("ALTER TABLE player_stats ADD COLUMN head_image_base64 TEXT")
+
+
 def get_cached_uuid(mcid: str) -> Optional[str]:
     with get_conn() as conn:
         row = conn.execute(
@@ -149,7 +161,6 @@ def get_player_by_discord(discord_user_id: str):
         ).fetchone()
 
 
-
 def get_player_by_uuid(minecraft_uuid: str):
     with get_conn() as conn:
         return conn.execute(
@@ -157,6 +168,13 @@ def get_player_by_uuid(minecraft_uuid: str):
             (minecraft_uuid,),
         ).fetchone()
 
+
+def get_player_by_username(minecraft_username: str):
+    with get_conn() as conn:
+        return conn.execute(
+            "SELECT * FROM players WHERE lower(minecraft_username) = lower(?)",
+            (minecraft_username,),
+        ).fetchone()
 
 
 def register_verified_player(
@@ -192,7 +210,6 @@ def register_verified_player(
         )
 
 
-
 def delete_player_registration_by_discord(discord_user_id: str) -> bool:
     with get_conn() as conn:
         cursor = conn.execute(
@@ -202,7 +219,6 @@ def delete_player_registration_by_discord(discord_user_id: str) -> bool:
         return cursor.rowcount > 0
 
 
-
 def delete_player_registration_by_uuid(minecraft_uuid: str) -> bool:
     with get_conn() as conn:
         cursor = conn.execute(
@@ -210,6 +226,35 @@ def delete_player_registration_by_uuid(minecraft_uuid: str) -> bool:
             (minecraft_uuid,),
         )
         return cursor.rowcount > 0
+
+
+def update_player_uuid(old_uuid: str, new_uuid: str, minecraft_username: Optional[str] = None):
+    with get_conn() as conn:
+        if old_uuid != new_uuid:
+            conn.execute(
+                "DELETE FROM player_stats WHERE minecraft_uuid = ?",
+                (new_uuid,),
+            )
+        conn.execute(
+            """
+            UPDATE players
+            SET minecraft_uuid = ?,
+                minecraft_username = COALESCE(?, minecraft_username),
+                updated_at = datetime('now')
+            WHERE minecraft_uuid = ?
+            """,
+            (new_uuid, minecraft_username, old_uuid),
+        )
+        conn.execute(
+            """
+            UPDATE player_stats
+            SET minecraft_uuid = ?,
+                minecraft_name = COALESCE(?, minecraft_name),
+                last_updated = datetime('now')
+            WHERE minecraft_uuid = ?
+            """,
+            (new_uuid, minecraft_username, old_uuid),
+        )
 
 
 def set_config_value(key: str, value: str):
@@ -259,6 +304,7 @@ def upsert_player_stats(
     fkdr: float,
     wlr: float,
     kdr: float,
+    head_image_base64: Optional[str] = None,
 ):
     with get_conn() as conn:
         conn.execute(
@@ -280,8 +326,9 @@ def upsert_player_stats(
                 fkdr,
                 wlr,
                 kdr,
+                head_image_base64,
                 last_updated
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
             ON CONFLICT(minecraft_uuid) DO UPDATE SET
                 minecraft_name=excluded.minecraft_name,
                 bedwars_star=excluded.bedwars_star,
@@ -298,6 +345,7 @@ def upsert_player_stats(
                 fkdr=excluded.fkdr,
                 wlr=excluded.wlr,
                 kdr=excluded.kdr,
+                head_image_base64=COALESCE(excluded.head_image_base64, player_stats.head_image_base64),
                 last_updated=datetime('now')
             """,
             (
@@ -317,8 +365,27 @@ def upsert_player_stats(
                 fkdr,
                 wlr,
                 kdr,
+                head_image_base64,
             ),
         )
+
+
+def get_player_stats_by_uuid(minecraft_uuid: str):
+    with get_conn() as conn:
+        return conn.execute(
+            """
+            SELECT
+                minecraft_uuid,
+                minecraft_name,
+                bedwars_star,
+                fkdr,
+                head_image_base64,
+                last_updated
+            FROM player_stats
+            WHERE minecraft_uuid = ?
+            """,
+            (minecraft_uuid,),
+        ).fetchone()
 
 
 def get_top_player_stats(metric: str, limit: int = 10):
@@ -356,6 +423,7 @@ def get_top_player_stats(metric: str, limit: int = 10):
                 fkdr,
                 wlr,
                 kdr,
+                head_image_base64,
                 last_updated
             FROM player_stats
             ORDER BY COALESCE({order_column}, 0) DESC, minecraft_name ASC
@@ -363,3 +431,16 @@ def get_top_player_stats(metric: str, limit: int = 10):
             """,
             (limit,),
         ).fetchall()
+
+
+def update_player_head_image(minecraft_uuid: str, head_image_base64: str):
+    with get_conn() as conn:
+        conn.execute(
+            """
+            UPDATE player_stats
+            SET head_image_base64 = ?,
+                last_updated = datetime('now')
+            WHERE minecraft_uuid = ?
+            """,
+            (head_image_base64, minecraft_uuid),
+        )
