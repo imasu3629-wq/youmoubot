@@ -1,216 +1,204 @@
-import discord
-from discord import app_commands
-import requests
-from bs4 import BeautifulSoup
 import os
-import io
-from PIL import Image, ImageDraw, ImageFont
-from flask import Flask
 from threading import Thread
+
+import discord
+import requests
+from discord import app_commands
+from flask import Flask
+from sqlite3 import IntegrityError
+
 from database import (
-    init_db, get_cached_uuid, save_uuid_cache,
-    register_player, update_stats, is_registered, is_registered_by_discord,
-    get_registered_by_discord, get_ranking_by_fkdr, get_ranking_by_star,
-    delete_player
+    delete_player_registration_by_discord,
+    delete_player_registration_by_uuid,
+    get_cached_uuid,
+    get_player_by_discord,
+    get_player_by_uuid,
+    init_db,
+    register_verified_player,
+    save_uuid_cache,
 )
 
+REQUEST_TIMEOUT = 10
+HYPIXEL_PLAYER_URL = "https://api.hypixel.net/v2/player"
+MOJANG_PROFILE_URL = "https://api.mojang.com/users/profiles/minecraft/{mcid}"
+SESSION_PROFILE_URL = "https://sessionserver.mojang.com/session/minecraft/profile/{uuid}"
+AUTHORIZED_USERS = [1278574483195559977]
+
 # --- 24時間稼働設定 ---
-app = Flask('')
-@app.route('/')
-def home(): return "Bot is alive!"
+app = Flask("")
+
+
+@app.route("/")
+def home():
+    return "Bot is alive!"
+
+
 
 def run():
     port = int(os.environ.get("PORT", 8080))
-    app.run(host='0.0.0.0', port=port)
+    app.run(host="0.0.0.0", port=port)
+
+
 
 def keep_alive():
-    t = Thread(target=run)
-    t.start()
+    thread = Thread(target=run)
+    thread.start()
 
-# --- 環境変数 ---
-TOKEN = os.environ['DISCORD_TOKEN']
-current_api_key = os.environ['HYPIXEL_KEY']
-AUTHORIZED_USERS = [1278574483195559977]
+
+TOKEN = os.environ["DISCORD_TOKEN"]
+current_api_key = os.environ["HYPIXEL_KEY"]
 
 intents = discord.Intents.default()
 bot = discord.Client(intents=intents)
 tree = app_commands.CommandTree(bot)
 
 
-# --- UUID取得ヘルパー（キャッシュ付き） ---
-def fetch_uuid(mcid: str):
-    cached = get_cached_uuid(mcid)
-    if cached:
-        return cached
-    res = requests.get(f"https://api.mojang.com/users/profiles/minecraft/{mcid}")
-    if res.status_code != 200:
-        return None
-    uuid = res.json().get('id')
-    if uuid:
-        save_uuid_cache(mcid, uuid)
-    return uuid
+class VerificationError(Exception):
+    def __init__(self, message: str):
+        super().__init__(message)
+        self.message = message
 
 
-# --- Hypixel ランク取得ヘルパー ---
-def get_rank(player_data):
-    if not player_data:
-        return ""
-    # 1. スタッフランク
-    rank = player_data.get("rank")
-    if rank and rank != "NORMAL":
-        return f"[{rank}]"
-    # 2. MVP++ (monthlyPackageRank)
-    monthly_rank = player_data.get("monthlyPackageRank")
-    if monthly_rank and monthly_rank != "NONE":
-        return "[MVP++]" if monthly_rank == "SUPERSTAR" else f"[{monthly_rank}]"
-    # 3. 一般寄付ランク (newPackageRank)
-    package_rank = player_data.get("newPackageRank")
-    if package_rank and package_rank != "NONE":
-        label = package_rank.replace("_PLUS", "+")
-        return f"[{label}]"
-    return ""
+
+def normalize_text(value: str) -> str:
+    return "".join(value.strip().lower().split()).lstrip("@")
 
 
-# --- Hypixel stats取得ヘルパー ---
-def fetch_hypixel_stats(uuid: str):
-    url = f"https://api.hypixel.net/v2/player?key={current_api_key}&uuid={uuid}"
-    res = requests.get(url).json()
-    if not res.get("player"):
-        return None, None, None
-    p = res["player"]
-    bw = p.get("stats", {}).get("Bedwars", {})
-    star = p.get("achievements", {}).get("bedwars_level", 0)
-    fk = bw.get("final_kills_bedwars", 0)
-    fd = bw.get("final_deaths_bedwars", 1)
-    fkdr = round(fk / max(fd, 1), 2)
-    rank_label = get_rank(p)
-    return star, fkdr, rank_label
+
+def get_discord_identity_candidates(user: discord.abc.User):
+    candidates = {normalize_text(user.name), normalize_text(f"@{user.name}")}
+    if getattr(user, "global_name", None):
+        candidates.add(normalize_text(user.global_name))
+        candidates.add(normalize_text(f"@{user.global_name}"))
+    if getattr(user, "discriminator", "0") not in (None, "0"):
+        tag = f"{user.name}#{user.discriminator}"
+        candidates.add(normalize_text(tag))
+        candidates.add(normalize_text(f"@{tag}"))
+    return {candidate for candidate in candidates if candidate}
 
 
-# --- ランキング画像生成 ---
-FONT_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "Minecraftia.ttf")
 
-def get_rank_color(fkdr: float):
-    if fkdr >= 2000: return (255, 85, 85)    # 赤
-    if fkdr >= 1000: return (255, 85, 255)   # ピンク
-    if fkdr >= 100:  return (255, 170, 0)    # 金
-    if fkdr >= 10:   return (85, 255, 85)    # 緑
-    if fkdr >= 4:    return (85, 255, 255)   # 水色
-    if fkdr >= 2:    return (255, 255, 85)   # 黄
-    return (170, 170, 170)                   # グレー
-
-def build_ranking_image(rows, mode: str) -> io.BytesIO:
-    W, ROW_H, PADDING = 700, 52, 16
-    H = PADDING * 2 + ROW_H * max(len(rows), 1) + 60
-    img = Image.new("RGBA", (W, H), (15, 15, 20, 255))
-    draw = ImageDraw.Draw(img)
-
-    # フォント
-    try:
-        font_title = ImageFont.truetype(FONT_PATH, 22)
-        font_main  = ImageFont.truetype(FONT_PATH, 18)
-        font_small = ImageFont.truetype(FONT_PATH, 14)
-    except Exception:
-        font_title = font_main = font_small = ImageFont.load_default()
-
-    # タイトル
-    title = "FKDR Ranking TOP10" if mode == "fkdr" else "Star Ranking TOP10"
-    draw.text((PADDING, PADDING), title, font=font_title, fill=(255, 215, 0))
-
-    medals = ["1st", "2nd", "3rd"]
-    y = PADDING + 48
-
-    for i, r in enumerate(rows):
-        # 行背景（交互）
-        bg = (25, 25, 35) if i % 2 == 0 else (20, 20, 28)
-        draw.rectangle([(0, y - 6), (W, y + ROW_H - 10)], fill=bg)
-
-        # 順位
-        rank_text = medals[i] if i < 3 else f"{i+1}."
-        rank_color = [(255, 215, 0), (192, 192, 192), (205, 127, 50)][i] if i < 3 else (150, 150, 150)
-        draw.text((PADDING, y), rank_text, font=font_small, fill=rank_color)
-
-        # MCID
-        draw.text((80, y), r["mcid"], font=font_main, fill=(255, 255, 255))
-
-        # スコア（右側）
-        if mode == "fkdr":
-            score_text = f"FKDR: {r['fkdr']}"
-            color = get_rank_color(r["fkdr"])
-        else:
-            score_text = f"Star: {r['star']}"
-            color = (255, 215, 0)
-        draw.text((W - 200, y), score_text, font=font_main, fill=color)
-
-        y += ROW_H
-
-    buf = io.BytesIO()
-    img.save(buf, format="PNG")
-    buf.seek(0)
-    return buf
-
-
-# --- ランキング選択View（最初に表示） ---
-class RankingSelectView(discord.ui.View):
-    def __init__(self):
-        super().__init__(timeout=60)
-
-    @discord.ui.button(label="⚔️ FKDR順", style=discord.ButtonStyle.primary)
-    async def fkdr_ranking(self, interaction: discord.Interaction, button: discord.ui.Button):
-        rows = get_ranking_by_fkdr()
-        buf = build_ranking_image(rows, "fkdr")
-        await interaction.response.edit_message(content=None, attachments=[discord.File(buf, filename="ranking.png")], view=RankingBackView())
-
-    @discord.ui.button(label="⭐ スター順", style=discord.ButtonStyle.secondary)
-    async def star_ranking(self, interaction: discord.Interaction, button: discord.ui.Button):
-        rows = get_ranking_by_star()
-        buf = build_ranking_image(rows, "star")
-        await interaction.response.edit_message(content=None, attachments=[discord.File(buf, filename="ranking.png")], view=RankingBackView())
-
-
-# --- ランキング表示後の戻るView ---
-class RankingBackView(discord.ui.View):
-    def __init__(self):
-        super().__init__(timeout=60)
-
-    @discord.ui.button(label="↩️ 選択に戻る", style=discord.ButtonStyle.danger)
-    async def back(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.edit_message(
-            content="📊 どちらのランキングを表示しますか？",
-            embed=None,
-            attachments=[],
-            view=RankingSelectView()
-        )
-
-
-def build_ranking_embed(rows, mode: str):
-    medals = ["🥇", "🥈", "🥉"]
-    if mode == "fkdr":
-        title = "⚔️ FKDR ランキング TOP10"
-        color = 0xe74c3c
-        lines = [
-            f"{medals[i] if i < 3 else f'`{i+1}.`'} **{r['mcid']}** — FKDR: `{r['fkdr']}`"
-            for i, r in enumerate(rows)
-        ]
-    else:
-        title = "⭐ スター ランキング TOP10"
-        color = 0xf1c40f
-        lines = [
-            f"{medals[i] if i < 3 else f'`{i+1}.`'} **{r['mcid']}** — ⭐{r['star']}"
-            for i, r in enumerate(rows)
-        ]
-    embed = discord.Embed(
-        title=title,
-        description="\n".join(lines) if lines else "データがありません",
-        color=color
+def fetch_current_name(uuid: str):
+    response = requests.get(
+        SESSION_PROFILE_URL.format(uuid=uuid), timeout=REQUEST_TIMEOUT
     )
-    embed.set_footer(text="↩️ 選択に戻るで切り替えできます")
-    return embed
+    if response.status_code != 200:
+        return None
+    return response.json().get("name")
 
 
-# ====================
-# コマンド
-# ====================
+
+def fetch_player_profile(mcid: str):
+    normalized_mcid = mcid.strip()
+    if not normalized_mcid:
+        return None
+
+    cached_uuid = get_cached_uuid(normalized_mcid)
+    if cached_uuid:
+        official_name = fetch_current_name(cached_uuid)
+        return {"uuid": cached_uuid, "name": official_name or normalized_mcid}
+
+    response = requests.get(
+        MOJANG_PROFILE_URL.format(mcid=normalized_mcid), timeout=REQUEST_TIMEOUT
+    )
+    if response.status_code == 204:
+        return None
+    if response.status_code != 200:
+        raise VerificationError("❌ Mojang API からプレイヤー情報を取得できませんでした。")
+
+    data = response.json()
+    minecraft_uuid = data.get("id")
+    official_name = data.get("name")
+    if not minecraft_uuid:
+        return None
+
+    save_uuid_cache(normalized_mcid, minecraft_uuid)
+    if official_name:
+        save_uuid_cache(official_name, minecraft_uuid)
+
+    return {"uuid": minecraft_uuid, "name": official_name or normalized_mcid}
+
+
+
+def fetch_hypixel_player(uuid: str):
+    response = requests.get(
+        HYPIXEL_PLAYER_URL,
+        params={"key": current_api_key, "uuid": uuid},
+        timeout=REQUEST_TIMEOUT,
+    )
+    if response.status_code == 429:
+        raise VerificationError("⚠️ Hypixel API のレート制限に達しました。少し待ってから再試行してください。")
+    if response.status_code != 200:
+        raise VerificationError("❌ Hypixel API からプレイヤー情報を取得できませんでした。")
+
+    payload = response.json()
+    if not payload.get("success", True):
+        raise VerificationError("❌ Hypixel API がエラーを返しました。")
+
+    player = payload.get("player")
+    if not player:
+        raise VerificationError("❌ Hypixel にプレイヤーデータが見つかりませんでした。")
+    return player
+
+
+
+def get_linked_discord_text(player_data) -> str | None:
+    social_media = player_data.get("socialMedia", {})
+    links = social_media.get("links", {}) if social_media else {}
+    discord_text = links.get("DISCORD")
+    if not discord_text:
+        return None
+    return str(discord_text).strip()
+
+
+
+def verify_hypixel_link(interaction_user: discord.abc.User, linked_discord_text: str):
+    normalized_link = normalize_text(linked_discord_text)
+    if not normalized_link:
+        return False
+    return normalized_link in get_discord_identity_candidates(interaction_user)
+
+
+
+def register_verified_account(discord_user: discord.abc.User, mcid: str):
+    existing_for_user = get_player_by_discord(discord_user.id)
+    if existing_for_user:
+        raise VerificationError("⚠️ You already have a registered MCID.")
+
+    profile = fetch_player_profile(mcid)
+    if not profile:
+        raise VerificationError("❌ Invalid MCID / username not found.")
+
+    existing_for_uuid = get_player_by_uuid(profile["uuid"])
+    if existing_for_uuid:
+        raise VerificationError("⚠️ This Minecraft account is already registered to another Discord user.")
+
+    player_data = fetch_hypixel_player(profile["uuid"])
+    linked_discord_text = get_linked_discord_text(player_data)
+    if not linked_discord_text:
+        raise VerificationError("❌ This Hypixel account does not have a linked Discord account.")
+
+    if not verify_hypixel_link(discord_user, linked_discord_text):
+        raise VerificationError("❌ The linked Discord account on Hypixel does not match your Discord account.")
+
+    try:
+        register_verified_player(
+            minecraft_uuid=profile["uuid"],
+            minecraft_username=profile["name"],
+            discord_user_id=discord_user.id,
+            linked_discord_text=linked_discord_text,
+            verification_status="verified",
+        )
+    except IntegrityError:
+        raise VerificationError("⚠️ Database uniqueness conflict occurred while saving the registration.")
+
+    return {
+        "minecraft_uuid": profile["uuid"],
+        "minecraft_username": profile["name"],
+        "linked_discord_text": linked_discord_text,
+        "verification_status": "verified",
+    }
+
 
 @bot.event
 async def on_ready():
@@ -218,243 +206,141 @@ async def on_ready():
     try:
         synced = await tree.sync()
         print(f"✅ {len(synced)}個のコマンドを同期しました")
-    except Exception as e:
-        print(f"❌ 同期エラー: {e}")
-    print(f'✅ Logged in as {bot.user.name}')
+    except Exception as error:
+        print(f"❌ 同期エラー: {error}")
+    print(f"✅ Logged in as {bot.user.name}")
 
 
-# --- /register ---
-@tree.command(name="register", description="MCIDを登録してBedwars戦績を記録します")
-async def register(interaction: discord.Interaction, mcid: str):
+@tree.command(name="verify", description="Hypixel連携Discordを使ってMCIDを検証・登録します")
+async def verify(interaction: discord.Interaction, mcid: str):
     await interaction.response.defer(ephemeral=True)
     try:
-        uuid = fetch_uuid(mcid)
-        if not uuid:
-            await interaction.followup.send("❌ プレイヤーが見つかりません。MCIDを確認してください。", ephemeral=True)
-            return
-
-        if is_registered(uuid):
-            await interaction.followup.send(f"⚠️ `{mcid}` はすでに登録されています。", ephemeral=True)
-            return
-
-        star, fkdr, _ = fetch_hypixel_stats(uuid)
-        if star is None:
-            await interaction.followup.send("❌ Hypixelからデータを取得できませんでした。", ephemeral=True)
-            return
-
-        register_player(uuid, mcid, interaction.user.id, star, fkdr)
-
-        embed = discord.Embed(title="✅ 登録完了", color=0x2ecc71)
-        embed.add_field(name="MCID", value=mcid, inline=True)
-        embed.add_field(name="⭐ Star", value=str(star), inline=True)
-        embed.add_field(name="⚔️ FKDR", value=str(fkdr), inline=True)
-        embed.set_footer(text="ランキングに反映されました")
-        await interaction.followup.send(embed=embed, ephemeral=True)
-    except Exception as e:
-        await interaction.followup.send(f"⚠️ エラーが発生しました: {e}", ephemeral=True)
-
-
-# --- /registered ---
-@tree.command(name="registered", description="自分が登録したMCID一覧を表示します")
-async def registered(interaction: discord.Interaction):
-    await interaction.response.defer(ephemeral=True)
-    try:
-        rows = get_registered_by_discord(interaction.user.id)
-        if not rows:
-            await interaction.followup.send("📭 登録されたMCIDはありません。`/register [MCID]` で登録できます。", ephemeral=True)
-            return
-
-        embed = discord.Embed(title="📋 登録済みMCID一覧", color=0x3498db)
-        lines = [
-            f"**{r['mcid']}** — ⭐{r['star']} FKDR:`{r['fkdr']}` （更新: {r['updated_at'][:10]}）"
-            for r in rows
-        ]
-        embed.description = "\n".join(lines)
-        await interaction.followup.send(embed=embed, ephemeral=True)
-    except Exception as e:
-        await interaction.followup.send(f"⚠️ エラー: {e}", ephemeral=True)
-
-
-# --- /refresh ---
-@tree.command(name="refresh", description="登録済みMCIDの戦績を最新データに更新します")
-async def refresh(interaction: discord.Interaction, mcid: str):
-    await interaction.response.defer(ephemeral=True)
-    try:
-        uuid = fetch_uuid(mcid)
-        if not uuid:
-            await interaction.followup.send("❌ プレイヤーが見つかりません。", ephemeral=True)
-            return
-
-        if not is_registered_by_discord(interaction.user.id, uuid):
-            await interaction.followup.send("❌ このMCIDはあなたが登録したものではありません。", ephemeral=True)
-            return
-
-        star, fkdr, _ = fetch_hypixel_stats(uuid)
-        if star is None:
-            await interaction.followup.send("❌ Hypixelからデータを取得できませんでした。", ephemeral=True)
-            return
-
-        # 最新MCIDも更新（名前変更対応）
-        update_stats(uuid, mcid, star, fkdr)
-
-        embed = discord.Embed(title="🔄 戦績を更新しました", color=0x9b59b6)
-        embed.add_field(name="MCID", value=mcid, inline=True)
-        embed.add_field(name="⭐ Star", value=str(star), inline=True)
-        embed.add_field(name="⚔️ FKDR", value=str(fkdr), inline=True)
-        await interaction.followup.send(embed=embed, ephemeral=True)
-    except Exception as e:
-        await interaction.followup.send(f"⚠️ エラー: {e}", ephemeral=True)
-
-
-# --- /ranking ---
-@tree.command(name="ranking", description="BedwarsランキングをFKDR順またはスター順で表示します")
-async def ranking(interaction: discord.Interaction):
-    await interaction.response.send_message(
-        content="📊 どちらのランキングを表示しますか？",
-        view=RankingSelectView()
-    )
-
-
-# --- /stats（既存・UUID対応に改良） ---
-def fkdr_comment(fkdr: float) -> str:
-    if fkdr >= 2000:
-        return "YAJUandU114514!!"
-    elif fkdr >= 1000:
-        return "強すぎィィィいくくぅぅ"
-    elif fkdr >= 100:
-        return "強いねぇぇ(泣)"
-    elif fkdr >= 10:
-        return "なかなかやる"
-    elif fkdr >= 4:
-        return "割と強い"
-    elif fkdr >= 2:
-        return "普通レベル"
-    else:
-        return "初心者だろう"
-
-
-@tree.command(name="stats", description="Hypixelの戦績を表示します")
-async def stats(interaction: discord.Interaction, mcid: str):
-    await interaction.response.defer()
-    try:
-        uuid = fetch_uuid(mcid)
-        if not uuid:
-            await interaction.followup.send("❌ プレイヤーが見つかりません。")
-            return
-        star, fkdr, rank_label = fetch_hypixel_stats(uuid)
-        if star is None:
-            await interaction.followup.send("❌ Hypixelにデータがありません。")
-            return
-        comment = fkdr_comment(fkdr)
-        if mcid.lower() == "haru_12m":
-            comment = "ハルはdefやろ"
-        if mcid.lower() == "youmouop":
-            rank_label = "[YOUMOU]"
-        display_name = f"{rank_label} {mcid}" if rank_label else mcid
-        embed = discord.Embed(title=f"{display_name} の戦績", color=0x00ff00)
-        embed.add_field(name="⭐ Star", value=str(star), inline=True)
-        embed.add_field(name="⚔️ FKDR", value=f"{fkdr}  |  {comment}", inline=True)
-        await interaction.followup.send(embed=embed)
-    except Exception as e:
-        await interaction.followup.send(f"⚠️ エラー: {e}")
-
-
-# --- /skin（既存） ---
-@tree.command(name="skin", description="指定したMCIDのスキン画像を表示します")
-async def skin(interaction: discord.Interaction, mcid: str):
-    await interaction.response.defer()
-    try:
-        uuid = fetch_uuid(mcid)
-        if not uuid:
-            await interaction.followup.send("❌ プレイヤーが見つかりません。")
-            return
-        render_url = f"https://visage.surgeplay.com/full/384/{uuid}.png"
-        raw_skin_url = f"https://visage.surgeplay.com/skin/{uuid}.png"
-        embed = discord.Embed(title=f"👕 {mcid} のスキン", color=0x9b59b6)
-        embed.set_image(url=render_url)
-        embed.add_field(name="📥 配布用データ", value=f"[この画像を保存して適用]({raw_skin_url})", inline=False)
-        await interaction.followup.send(embed=embed)
-    except:
-        await interaction.followup.send("⚠️ スキン取得エラー")
-
-
-# --- NameMC スクレイピングヘルパー ---
-def fetch_namemc_history(uuid: str):
-    url = f"https://namemc.com/profile/{uuid}"
-    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
-    res = requests.get(url, headers=headers)
-    if res.status_code != 200:
-        return []
-    soup = BeautifulSoup(res.text, "html.parser")
-    rows = soup.select("table#name-history tbody tr")
-    history = []
-    for row in rows:
-        cols = row.select("td")
-        if len(cols) >= 1:
-            name = cols[0].get_text(strip=True)
-            date = cols[1].get_text(strip=True) if len(cols) > 1 else "最初のID"
-            history.append({"username": name, "changed_at": date})
-    return history
-
-
-# --- /history（NameMC版） ---
-@tree.command(name="history", description="MCIDの変更履歴を表示します")
-async def history(interaction: discord.Interaction, mcid: str):
-    await interaction.response.defer()
-    try:
-        uuid = fetch_uuid(mcid)
-        if not uuid:
-            await interaction.followup.send("❌ プレイヤーが見つかりません。")
-            return
-        history_data = fetch_namemc_history(uuid)
-        if history_data:
-            embed = discord.Embed(title=f"📜 {mcid} のID変更履歴", color=0x3498db)
-            lines = []
-            for entry in history_data:
-                name = entry["username"]
-                date = entry["changed_at"]
-                if date and date != "最初のID":
-                    lines.append(f"📅 `{date}` ➔ **{name}**")
-                else:
-                    lines.append(f"🌱 `最初のID` ➔ **{name}**")
-            embed.description = "\n".join(lines)
-            embed.set_footer(text="Data provided by NameMC")
-            await interaction.followup.send(embed=embed)
-        else:
-            await interaction.followup.send(f"ℹ️ {mcid} の履歴データが見つかりませんでした。")
-    except Exception as e:
-        await interaction.followup.send("⚠️ 履歴取得中にエラーが発生しました。")
-
-# --- /delete ---
-@tree.command(name="delete", description="登録したMCIDをランキングから削除します")
-async def delete(interaction: discord.Interaction, mcid: str):
-    await interaction.response.defer(ephemeral=True)
-    try:
-        uuid = fetch_uuid(mcid)
-        if not uuid:
-            await interaction.followup.send("❌ プレイヤーが見つかりません。", ephemeral=True)
-            return
-        if not is_registered_by_discord(interaction.user.id, uuid):
-            await interaction.followup.send("❌ このMCIDはあなたが登録したものではありません。", ephemeral=True)
-            return
-        success = delete_player(interaction.user.id, uuid)
-        if success:
-            await interaction.followup.send(f"🗑️ `{mcid}` をランキングから削除しました。", ephemeral=True)
-        else:
-            await interaction.followup.send("❌ 削除に失敗しました。", ephemeral=True)
-    except Exception as e:
-        await interaction.followup.send(f"⚠️ エラー: {e}", ephemeral=True)
-
-
-# --- /setkey（既存） ---
-@tree.command(name="setkey", description="APIキーを更新")
-async def setkey(interaction: discord.Interaction, new_key: str):
-    global current_api_key
-    if interaction.user.id not in AUTHORIZED_USERS:
-        await interaction.response.send_message("❌ 権限なし", ephemeral=True)
+        result = register_verified_account(interaction.user, mcid)
+    except VerificationError as error:
+        await interaction.followup.send(error.message, ephemeral=True)
         return
-    current_api_key = new_key
-    await interaction.response.send_message("✅ 更新完了", ephemeral=True)
+    except requests.RequestException:
+        await interaction.followup.send(
+            "⚠️ ネットワークエラーが発生しました。少し待ってから再試行してください。",
+            ephemeral=True,
+        )
+        return
+    except Exception as error:
+        await interaction.followup.send(f"⚠️ エラーが発生しました: {error}", ephemeral=True)
+        return
+
+    embed = discord.Embed(
+        title="✅ Verification successful",
+        description="Your MCID has been registered.",
+        color=0x2ECC71,
+    )
+    embed.add_field(name="MCID", value=result["minecraft_username"], inline=False)
+    embed.add_field(name="Minecraft UUID", value=result["minecraft_uuid"], inline=False)
+    embed.add_field(
+        name="Linked Discord on Hypixel",
+        value=result["linked_discord_text"],
+        inline=False,
+    )
+    embed.add_field(
+        name="Verification Status",
+        value=result["verification_status"],
+        inline=False,
+    )
+    await interaction.followup.send(embed=embed, ephemeral=True)
+
+
+@tree.command(name="whoami", description="自分の登録済みMCID情報を確認します")
+async def whoami(interaction: discord.Interaction):
+    await interaction.response.defer(ephemeral=True)
+    row = get_player_by_discord(interaction.user.id)
+    if not row:
+        await interaction.followup.send("ℹ️ 現在登録されている MCID はありません。", ephemeral=True)
+        return
+
+    embed = discord.Embed(title="📌 Registered MCID", color=0x3498DB)
+    embed.add_field(name="MCID", value=row["minecraft_username"], inline=False)
+    embed.add_field(name="Minecraft UUID", value=row["minecraft_uuid"], inline=False)
+    embed.add_field(name="Linked Discord", value=row["linked_discord_text"] or "(none)", inline=False)
+    embed.add_field(name="Status", value=row["verification_status"], inline=False)
+    embed.add_field(name="Registered At", value=row["registered_at"], inline=False)
+    embed.add_field(name="Updated At", value=row["updated_at"], inline=False)
+    await interaction.followup.send(embed=embed, ephemeral=True)
+
+
+@tree.command(name="lookup", description="登録済みMCIDを確認します（管理者用）")
+async def lookup(interaction: discord.Interaction, mcid: str):
+    await interaction.response.defer(ephemeral=True)
+    if interaction.user.id not in AUTHORIZED_USERS:
+        await interaction.followup.send("❌ 権限なし", ephemeral=True)
+        return
+
+    try:
+        profile = fetch_player_profile(mcid)
+    except VerificationError as error:
+        await interaction.followup.send(error.message, ephemeral=True)
+        return
+    except requests.RequestException:
+        await interaction.followup.send("⚠️ Mojang API への接続に失敗しました。", ephemeral=True)
+        return
+
+    if not profile:
+        await interaction.followup.send("❌ Invalid MCID / username not found.", ephemeral=True)
+        return
+
+    row = get_player_by_uuid(profile["uuid"])
+    if not row:
+        await interaction.followup.send("ℹ️ この MCID はまだ登録されていません。", ephemeral=True)
+        return
+
+    embed = discord.Embed(title="🔍 Registration Lookup", color=0x9B59B6)
+    embed.add_field(name="MCID", value=row["minecraft_username"], inline=False)
+    embed.add_field(name="Minecraft UUID", value=row["minecraft_uuid"], inline=False)
+    embed.add_field(name="Discord User ID", value=row["discord_user_id"], inline=False)
+    embed.add_field(name="Linked Discord", value=row["linked_discord_text"] or "(none)", inline=False)
+    embed.add_field(name="Status", value=row["verification_status"], inline=False)
+    await interaction.followup.send(embed=embed, ephemeral=True)
+
+
+@tree.command(name="resetverify", description="登録済みMCIDをリセットします（管理者用）")
+@app_commands.describe(discord_user_id="Discord user id", mcid="Minecraft username")
+async def resetverify(
+    interaction: discord.Interaction,
+    discord_user_id: str | None = None,
+    mcid: str | None = None,
+):
+    await interaction.response.defer(ephemeral=True)
+    if interaction.user.id not in AUTHORIZED_USERS:
+        await interaction.followup.send("❌ 権限なし", ephemeral=True)
+        return
+
+    if not discord_user_id and not mcid:
+        await interaction.followup.send(
+            "⚠️ discord_user_id か mcid のどちらかを指定してください。",
+            ephemeral=True,
+        )
+        return
+
+    deleted = False
+    if discord_user_id:
+        deleted = delete_player_registration_by_discord(discord_user_id) or deleted
+
+    if mcid:
+        try:
+            profile = fetch_player_profile(mcid)
+        except VerificationError as error:
+            await interaction.followup.send(error.message, ephemeral=True)
+            return
+        except requests.RequestException:
+            await interaction.followup.send("⚠️ Mojang API への接続に失敗しました。", ephemeral=True)
+            return
+        if profile:
+            deleted = delete_player_registration_by_uuid(profile["uuid"]) or deleted
+
+    if not deleted:
+        await interaction.followup.send("ℹ️ 削除対象の登録は見つかりませんでした。", ephemeral=True)
+        return
+
+    await interaction.followup.send("✅ 登録をリセットしました。", ephemeral=True)
 
 
 keep_alive()
