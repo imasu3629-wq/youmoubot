@@ -1,5 +1,6 @@
 import os
 from threading import Thread
+from typing import Optional
 
 import discord
 import requests
@@ -9,12 +10,16 @@ from sqlite3 import IntegrityError
 
 from database import (
     delete_player_registration_by_uuid,
+    get_all_registered_players,
     get_cached_uuid,
+    get_config_value,
     get_player_by_discord,
     get_player_by_uuid,
     init_db,
     register_verified_player,
     save_uuid_cache,
+    set_config_value,
+    upsert_player_stats,
 )
 
 REQUEST_TIMEOUT = 10
@@ -45,7 +50,7 @@ def keep_alive():
 
 
 TOKEN = os.environ["DISCORD_TOKEN"]
-current_api_key = os.environ["HYPIXEL_KEY"]
+current_api_key = os.environ.get("HYPIXEL_KEY", "")
 
 intents = discord.Intents.default()
 bot = discord.Client(intents=intents)
@@ -120,9 +125,13 @@ def fetch_player_profile(mcid: str):
 
 
 def fetch_hypixel_player(uuid: str):
+    api_key = get_hypixel_api_key()
+    if not api_key:
+        raise VerificationError("❌ Hypixel API key is not configured. Use /updateapi first.")
+
     response = requests.get(
         HYPIXEL_PLAYER_URL,
-        params={"key": current_api_key, "uuid": uuid},
+        params={"key": api_key, "uuid": uuid},
         timeout=REQUEST_TIMEOUT,
     )
     if response.status_code == 429:
@@ -139,6 +148,99 @@ def fetch_hypixel_player(uuid: str):
         raise VerificationError("❌ Hypixel にプレイヤーデータが見つかりませんでした。")
     return player
 
+
+
+def get_hypixel_api_key() -> str:
+    stored_key = get_config_value("hypixel_api_key")
+    if stored_key:
+        return stored_key
+    return current_api_key
+
+
+def _safe_int(value) -> int:
+    try:
+        return int(value or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _safe_ratio(numerator: int, denominator: int) -> float:
+    return round(numerator / max(denominator, 1), 2)
+
+
+def fetch_and_store_player_stats(uuid: str):
+    api_key = get_hypixel_api_key()
+    if not api_key:
+        raise VerificationError("❌ Hypixel API key is not configured. Use /updateapi first.")
+
+    response = requests.get(
+        HYPIXEL_PLAYER_URL,
+        params={"key": api_key, "uuid": uuid},
+        timeout=REQUEST_TIMEOUT,
+    )
+    if response.status_code == 429:
+        raise VerificationError("⚠️ Hypixel API のレート制限に達しました。少し待ってから再試行してください。")
+    if response.status_code != 200:
+        raise VerificationError("❌ Hypixel API からプレイヤー情報を取得できませんでした。")
+
+    payload = response.json()
+    if not payload.get("success", False):
+        raise VerificationError("❌ Hypixel API がエラーを返しました。")
+
+    player = payload.get("player")
+    if not player:
+        raise VerificationError("❌ Hypixel にプレイヤーデータが見つかりませんでした。")
+
+    achievements = player.get("achievements") or {}
+    bedwars_stats = ((player.get("stats") or {}).get("Bedwars")) or {}
+
+    minecraft_uuid = str(player.get("uuid") or uuid)
+    minecraft_name = str(player.get("displayname") or fetch_current_name(uuid) or uuid)
+    bedwars_star = _safe_int(achievements.get("bedwars_level"))
+    wins = _safe_int(bedwars_stats.get("wins_bedwars"))
+    losses = _safe_int(bedwars_stats.get("losses_bedwars"))
+    final_kills = _safe_int(bedwars_stats.get("final_kills_bedwars"))
+    final_deaths = _safe_int(bedwars_stats.get("final_deaths_bedwars"))
+    beds_broken = _safe_int(bedwars_stats.get("beds_broken_bedwars"))
+    beds_lost = _safe_int(bedwars_stats.get("beds_lost_bedwars"))
+    kills = _safe_int(bedwars_stats.get("kills_bedwars"))
+    deaths = _safe_int(bedwars_stats.get("deaths_bedwars"))
+    games_played = _safe_int(bedwars_stats.get("games_played_bedwars"))
+    winstreak = _safe_int(bedwars_stats.get("winstreak"))
+
+    upsert_player_stats(
+        minecraft_uuid=minecraft_uuid,
+        minecraft_name=minecraft_name,
+        bedwars_star=bedwars_star,
+        wins=wins,
+        losses=losses,
+        final_kills=final_kills,
+        final_deaths=final_deaths,
+        beds_broken=beds_broken,
+        beds_lost=beds_lost,
+        kills=kills,
+        deaths=deaths,
+        games_played=games_played,
+        winstreak=winstreak,
+        fkdr=_safe_ratio(final_kills, final_deaths),
+        wlr=_safe_ratio(wins, losses),
+        kdr=_safe_ratio(kills, deaths),
+    )
+
+
+def resolve_target_uuid(mcid_or_uuid: str) -> Optional[str]:
+    value = mcid_or_uuid.strip()
+    if not value:
+        return None
+
+    compact = value.replace("-", "").lower()
+    if len(compact) == 32 and all(ch in "0123456789abcdef" for ch in compact):
+        return compact
+
+    profile = fetch_player_profile(value)
+    if not profile:
+        return None
+    return profile["uuid"]
 
 
 def get_linked_discord_text(player_data) -> str | None:
@@ -392,6 +494,72 @@ async def add(interaction: discord.Interaction, mcid: str):
     embed.add_field(name="Minecraft UUID", value=result["minecraft_uuid"], inline=False)
     embed.add_field(name="Verification Status", value=result["verification_status"], inline=False)
     await interaction.followup.send(embed=embed, ephemeral=True)
+
+
+@tree.command(name="updateapi", description="Hypixel API キーを更新します（管理者用）")
+async def updateapi(interaction: discord.Interaction, api_key: str):
+    await interaction.response.defer(ephemeral=True)
+    if not is_admin(interaction.user.id):
+        await interaction.followup.send("❌ You do not have permission to use this command.", ephemeral=True)
+        return
+
+    cleaned_key = api_key.strip()
+    if not cleaned_key:
+        await interaction.followup.send("❌ API key cannot be empty.", ephemeral=True)
+        return
+
+    global current_api_key
+    current_api_key = cleaned_key
+    set_config_value("hypixel_api_key", cleaned_key)
+    await interaction.followup.send("Hypixel API key updated successfully.", ephemeral=True)
+
+
+@tree.command(name="update", description="Hypixel Bedwars stats を更新します（管理者用）")
+async def update(interaction: discord.Interaction, mcid_or_all: str):
+    await interaction.response.defer(ephemeral=True)
+    if not is_admin(interaction.user.id):
+        await interaction.followup.send("❌ You do not have permission to use this command.", ephemeral=True)
+        return
+
+    target = mcid_or_all.strip()
+    if not target:
+        await interaction.followup.send("❌ Please provide a target (all, MC username, or UUID).", ephemeral=True)
+        return
+
+    try:
+        if target.lower() == "all":
+            players = get_all_registered_players()
+            success = 0
+            failed = 0
+            for player in players:
+                try:
+                    fetch_and_store_player_stats(player["minecraft_uuid"])
+                    success += 1
+                except Exception:
+                    failed += 1
+
+            await interaction.followup.send(
+                f"Update complete. Success: {success}, Failed: {failed}",
+                ephemeral=True,
+            )
+            return
+
+        uuid = resolve_target_uuid(target)
+        if not uuid:
+            await interaction.followup.send("❌ Invalid MCID / username not found.", ephemeral=True)
+            return
+
+        fetch_and_store_player_stats(uuid)
+        await interaction.followup.send("✅ Player stats updated successfully.", ephemeral=True)
+    except VerificationError as error:
+        await interaction.followup.send(error.message, ephemeral=True)
+    except requests.RequestException:
+        await interaction.followup.send(
+            "⚠️ Network error while contacting Mojang/Hypixel services. Please try again.",
+            ephemeral=True,
+        )
+    except Exception as error:
+        await interaction.followup.send(f"⚠️ エラーが発生しました: {error}", ephemeral=True)
 
 
 keep_alive()
