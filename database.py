@@ -1,53 +1,96 @@
 import os
-import sqlite3
-from typing import Optional
+from contextlib import contextmanager
+from typing import Any, Iterator, Optional
 
-DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "bot_data.db")
+import psycopg2
+from psycopg2 import IntegrityError
+from psycopg2.extras import RealDictCursor
+
+DATABASE_URL = os.environ.get("DATABASE_URL")
+if not DATABASE_URL:
+    raise RuntimeError("DATABASE_URL environment variable is required")
 
 
-def get_conn():
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
-    return conn
+def _connect_kwargs() -> dict[str, Any]:
+    kwargs: dict[str, Any] = {"dsn": DATABASE_URL}
+    if "sslmode=" not in DATABASE_URL:
+        kwargs["sslmode"] = os.environ.get("PGSSLMODE", "disable" if ".railway.internal" in DATABASE_URL else "require")
+    return kwargs
+
+
+@contextmanager
+def get_conn() -> Iterator[psycopg2.extensions.connection]:
+    conn = psycopg2.connect(**_connect_kwargs())
+    try:
+        yield conn
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+def _fetchone_dict(cursor) -> Optional[dict[str, Any]]:
+    row = cursor.fetchone()
+    return dict(row) if row else None
+
+
+def _fetchall_dict(cursor) -> list[dict[str, Any]]:
+    return [dict(row) for row in cursor.fetchall()]
 
 
 def init_db():
-    with get_conn() as conn:
-        conn.execute("""
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            """
             CREATE TABLE IF NOT EXISTS uuid_cache (
                 mcid TEXT PRIMARY KEY,
                 uuid TEXT NOT NULL,
-                cached_at TEXT DEFAULT (datetime('now'))
+                cached_at TIMESTAMP DEFAULT NOW()
             )
-        """)
-        conn.execute("""
+            """
+        )
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS verified_users (
+                discord_user_id TEXT PRIMARY KEY,
+                mcid TEXT UNIQUE NOT NULL,
+                uuid TEXT UNIQUE,
+                registered_at TIMESTAMP DEFAULT NOW()
+            )
+            """
+        )
+        cur.execute(
+            """
             CREATE TABLE IF NOT EXISTS players (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                id SERIAL PRIMARY KEY,
                 minecraft_uuid TEXT NOT NULL UNIQUE,
                 minecraft_username TEXT NOT NULL,
                 discord_user_id TEXT UNIQUE,
                 linked_discord_text TEXT,
                 verification_status TEXT NOT NULL,
-                registered_by_admin INTEGER NOT NULL DEFAULT 0,
-                registered_at TEXT DEFAULT (datetime('now')),
-                updated_at TEXT DEFAULT (datetime('now'))
+                registered_by_admin BOOLEAN NOT NULL DEFAULT FALSE,
+                registered_at TIMESTAMP DEFAULT NOW(),
+                updated_at TIMESTAMP DEFAULT NOW()
             )
-        """)
-        _migrate_players_table_if_needed(conn)
-        conn.execute(
-            "CREATE INDEX IF NOT EXISTS idx_players_status ON players (verification_status)"
+            """
         )
-        conn.execute(
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_players_status ON players (verification_status)")
+        cur.execute(
             "CREATE UNIQUE INDEX IF NOT EXISTS idx_players_discord_nonnull ON players(discord_user_id) WHERE discord_user_id IS NOT NULL"
         )
-        conn.execute("""
+        cur.execute(
+            """
             CREATE TABLE IF NOT EXISTS bot_config (
                 key TEXT PRIMARY KEY,
                 value TEXT NOT NULL,
-                updated_at TEXT DEFAULT (datetime('now'))
+                updated_at TIMESTAMP DEFAULT NOW()
             )
-        """)
-        conn.execute("""
+            """
+        )
+        cur.execute(
+            """
             CREATE TABLE IF NOT EXISTS player_stats (
                 minecraft_uuid TEXT PRIMARY KEY,
                 minecraft_name TEXT NOT NULL,
@@ -62,119 +105,91 @@ def init_db():
                 deaths INTEGER NOT NULL DEFAULT 0,
                 games_played INTEGER NOT NULL DEFAULT 0,
                 winstreak INTEGER NOT NULL DEFAULT 0,
-                fkdr REAL NOT NULL DEFAULT 0,
-                wlr REAL NOT NULL DEFAULT 0,
-                kdr REAL NOT NULL DEFAULT 0,
+                fkdr DOUBLE PRECISION NOT NULL DEFAULT 0,
+                wlr DOUBLE PRECISION NOT NULL DEFAULT 0,
+                kdr DOUBLE PRECISION NOT NULL DEFAULT 0,
                 head_image_base64 TEXT,
-                last_updated TEXT DEFAULT (datetime('now'))
+                last_updated TIMESTAMP DEFAULT NOW()
             )
-        """)
-        _migrate_player_stats_table_if_needed(conn)
-        conn.execute(
-            "CREATE INDEX IF NOT EXISTS idx_player_stats_name ON player_stats (minecraft_name)"
+            """
         )
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_player_stats_name ON player_stats (minecraft_name)")
 
 
-def _migrate_players_table_if_needed(conn: sqlite3.Connection):
-    columns = conn.execute("PRAGMA table_info(players)").fetchall()
-    if not columns:
-        return
-
-    has_registered_by_admin = any(col["name"] == "registered_by_admin" for col in columns)
-    discord_notnull = any(col["name"] == "discord_user_id" and col["notnull"] == 1 for col in columns)
-    if has_registered_by_admin and not discord_notnull:
-        return
-
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS players_new (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            minecraft_uuid TEXT NOT NULL UNIQUE,
-            minecraft_username TEXT NOT NULL,
-            discord_user_id TEXT UNIQUE,
-            linked_discord_text TEXT,
-            verification_status TEXT NOT NULL,
-            registered_by_admin INTEGER NOT NULL DEFAULT 0,
-            registered_at TEXT DEFAULT (datetime('now')),
-            updated_at TEXT DEFAULT (datetime('now'))
-        )
-    """)
-    conn.execute("""
-        INSERT INTO players_new (
-            id,
-            minecraft_uuid,
-            minecraft_username,
-            discord_user_id,
-            linked_discord_text,
-            verification_status,
-            registered_by_admin,
-            registered_at,
-            updated_at
-        )
-        SELECT
-            id,
-            minecraft_uuid,
-            minecraft_username,
-            discord_user_id,
-            linked_discord_text,
-            verification_status,
-            0,
-            registered_at,
-            updated_at
-        FROM players
-    """)
-    conn.execute("DROP TABLE players")
-    conn.execute("ALTER TABLE players_new RENAME TO players")
+def _admin_shadow_id(minecraft_uuid: str) -> str:
+    return f"admin:{minecraft_uuid}"
 
 
-def _migrate_player_stats_table_if_needed(conn: sqlite3.Connection):
-    columns = conn.execute("PRAGMA table_info(player_stats)").fetchall()
-    if not columns:
-        return
-    has_head_column = any(col["name"] == "head_image_base64" for col in columns)
-    if has_head_column:
-        return
-    conn.execute("ALTER TABLE player_stats ADD COLUMN head_image_base64 TEXT")
+def _normalize_row_with_aliases(row: Optional[dict[str, Any]]) -> Optional[dict[str, Any]]:
+    if not row:
+        return None
+    normalized = dict(row)
+    normalized.setdefault("minecraft_username", normalized.get("mcid"))
+    normalized.setdefault("minecraft_uuid", normalized.get("uuid"))
+    normalized.setdefault("linked_discord_text", None)
+    normalized.setdefault("verification_status", "verified")
+    normalized.setdefault("registered_by_admin", False)
+    normalized.setdefault("updated_at", normalized.get("registered_at"))
+    return normalized
 
 
 def get_cached_uuid(mcid: str) -> Optional[str]:
-    with get_conn() as conn:
-        row = conn.execute(
-            "SELECT uuid FROM uuid_cache WHERE mcid = ? AND cached_at > datetime('now', '-1 days')",
+    with get_conn() as conn, conn.cursor(cursor_factory=RealDictCursor) as cur:
+        cur.execute(
+            "SELECT uuid FROM uuid_cache WHERE mcid = %s AND cached_at > NOW() - INTERVAL '1 day'",
             (mcid.strip().lower(),),
-        ).fetchone()
+        )
+        row = _fetchone_dict(cur)
         return row["uuid"] if row else None
 
 
 def save_uuid_cache(mcid: str, uuid: str):
-    with get_conn() as conn:
-        conn.execute(
-            "INSERT OR REPLACE INTO uuid_cache (mcid, uuid, cached_at) VALUES (?, ?, datetime('now'))",
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO uuid_cache (mcid, uuid, cached_at)
+            VALUES (%s, %s, NOW())
+            ON CONFLICT (mcid) DO UPDATE SET
+                uuid = EXCLUDED.uuid,
+                cached_at = NOW()
+            """,
             (mcid.strip().lower(), uuid),
         )
 
 
 def get_player_by_discord(discord_user_id: str):
-    with get_conn() as conn:
-        return conn.execute(
-            "SELECT * FROM players WHERE discord_user_id = ?",
+    with get_conn() as conn, conn.cursor(cursor_factory=RealDictCursor) as cur:
+        cur.execute(
+            "SELECT discord_user_id, mcid, uuid, registered_at FROM verified_users WHERE discord_user_id = %s",
             (str(discord_user_id),),
-        ).fetchone()
+        )
+        return _normalize_row_with_aliases(_fetchone_dict(cur))
 
 
 def get_player_by_uuid(minecraft_uuid: str):
-    with get_conn() as conn:
-        return conn.execute(
-            "SELECT * FROM players WHERE minecraft_uuid = ?",
+    with get_conn() as conn, conn.cursor(cursor_factory=RealDictCursor) as cur:
+        cur.execute(
+            "SELECT discord_user_id, mcid, uuid, registered_at FROM verified_users WHERE uuid = %s",
             (minecraft_uuid,),
-        ).fetchone()
+        )
+        row = _fetchone_dict(cur)
+        if not row:
+            return None
+        normalized = _normalize_row_with_aliases(row)
+        if normalized and str(normalized.get("discord_user_id", "")).startswith("admin:"):
+            normalized["discord_user_id"] = None
+            normalized["registered_by_admin"] = True
+            normalized["verification_status"] = "forced_verified"
+        return normalized
 
 
 def get_player_by_username(minecraft_username: str):
-    with get_conn() as conn:
-        return conn.execute(
-            "SELECT * FROM players WHERE lower(minecraft_username) = lower(?)",
+    with get_conn() as conn, conn.cursor(cursor_factory=RealDictCursor) as cur:
+        cur.execute(
+            "SELECT discord_user_id, mcid, uuid, registered_at FROM verified_users WHERE lower(mcid) = lower(%s)",
             (minecraft_username,),
-        ).fetchone()
+        )
+        return _normalize_row_with_aliases(_fetchone_dict(cur))
 
 
 def register_verified_player(
@@ -185,8 +200,18 @@ def register_verified_player(
     verification_status: str = "verified",
     registered_by_admin: bool = False,
 ):
-    with get_conn() as conn:
-        conn.execute(
+    normalized_discord_user_id = (
+        _admin_shadow_id(minecraft_uuid) if discord_user_id is None else str(discord_user_id)
+    )
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO verified_users (discord_user_id, mcid, uuid, registered_at)
+            VALUES (%s, %s, %s, NOW())
+            """,
+            (normalized_discord_user_id, minecraft_username, minecraft_uuid),
+        )
+        cur.execute(
             """
             INSERT INTO players (
                 minecraft_uuid,
@@ -197,109 +222,108 @@ def register_verified_player(
                 registered_by_admin,
                 registered_at,
                 updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))
+            ) VALUES (%s, %s, %s, %s, %s, %s, NOW(), NOW())
+            ON CONFLICT (minecraft_uuid) DO UPDATE SET
+                minecraft_username = EXCLUDED.minecraft_username,
+                discord_user_id = EXCLUDED.discord_user_id,
+                linked_discord_text = EXCLUDED.linked_discord_text,
+                verification_status = EXCLUDED.verification_status,
+                registered_by_admin = EXCLUDED.registered_by_admin,
+                updated_at = NOW()
             """,
             (
                 minecraft_uuid,
                 minecraft_username,
-                str(discord_user_id) if discord_user_id is not None else None,
+                normalized_discord_user_id if not normalized_discord_user_id.startswith("admin:") else None,
                 linked_discord_text,
                 verification_status,
-                1 if registered_by_admin else 0,
+                registered_by_admin,
             ),
         )
 
 
 def delete_player_registration_by_discord(discord_user_id: str) -> bool:
-    with get_conn() as conn:
-        cursor = conn.execute(
-            "DELETE FROM players WHERE discord_user_id = ?",
-            (str(discord_user_id),),
-        )
-        return cursor.rowcount > 0
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute("DELETE FROM verified_users WHERE discord_user_id = %s", (str(discord_user_id),))
+        return cur.rowcount > 0
 
 
 def delete_player_registration_by_uuid(minecraft_uuid: str) -> bool:
-    with get_conn() as conn:
-        cursor = conn.execute(
-            "DELETE FROM players WHERE minecraft_uuid = ?",
-            (minecraft_uuid,),
-        )
-        return cursor.rowcount > 0
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute("DELETE FROM verified_users WHERE uuid = %s", (minecraft_uuid,))
+        deleted = cur.rowcount > 0
+        cur.execute("DELETE FROM players WHERE minecraft_uuid = %s", (minecraft_uuid,))
+        return deleted
 
 
 def delete_registered_player_data_by_uuid(minecraft_uuid: str) -> bool:
-    with get_conn() as conn:
-        player_cursor = conn.execute(
-            "DELETE FROM players WHERE minecraft_uuid = ?",
-            (minecraft_uuid,),
-        )
-        if player_cursor.rowcount == 0:
-            return False
-        conn.execute(
-            "DELETE FROM player_stats WHERE minecraft_uuid = ?",
-            (minecraft_uuid,),
-        )
-        return True
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute("DELETE FROM verified_users WHERE uuid = %s", (minecraft_uuid,))
+        deleted = cur.rowcount > 0
+        cur.execute("DELETE FROM players WHERE minecraft_uuid = %s", (minecraft_uuid,))
+        cur.execute("DELETE FROM player_stats WHERE minecraft_uuid = %s", (minecraft_uuid,))
+        return deleted
 
 
 def update_player_uuid(old_uuid: str, new_uuid: str, minecraft_username: Optional[str] = None):
-    with get_conn() as conn:
-        if old_uuid != new_uuid:
-            conn.execute(
-                "DELETE FROM player_stats WHERE minecraft_uuid = ?",
-                (new_uuid,),
-            )
-        conn.execute(
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute("DELETE FROM player_stats WHERE minecraft_uuid = %s", (new_uuid,))
+        cur.execute(
             """
-            UPDATE players
-            SET minecraft_uuid = ?,
-                minecraft_username = COALESCE(?, minecraft_username),
-                updated_at = datetime('now')
-            WHERE minecraft_uuid = ?
+            UPDATE verified_users
+            SET uuid = %s,
+                mcid = COALESCE(%s, mcid)
+            WHERE uuid = %s
             """,
             (new_uuid, minecraft_username, old_uuid),
         )
-        conn.execute(
+        cur.execute(
+            """
+            UPDATE players
+            SET minecraft_uuid = %s,
+                minecraft_username = COALESCE(%s, minecraft_username),
+                updated_at = NOW()
+            WHERE minecraft_uuid = %s
+            """,
+            (new_uuid, minecraft_username, old_uuid),
+        )
+        cur.execute(
             """
             UPDATE player_stats
-            SET minecraft_uuid = ?,
-                minecraft_name = COALESCE(?, minecraft_name),
-                last_updated = datetime('now')
-            WHERE minecraft_uuid = ?
+            SET minecraft_uuid = %s,
+                minecraft_name = COALESCE(%s, minecraft_name),
+                last_updated = NOW()
+            WHERE minecraft_uuid = %s
             """,
             (new_uuid, minecraft_username, old_uuid),
         )
 
 
 def set_config_value(key: str, value: str):
-    with get_conn() as conn:
-        conn.execute(
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute(
             """
             INSERT INTO bot_config (key, value, updated_at)
-            VALUES (?, ?, datetime('now'))
+            VALUES (%s, %s, NOW())
             ON CONFLICT(key) DO UPDATE SET
-                value=excluded.value,
-                updated_at=datetime('now')
+                value = EXCLUDED.value,
+                updated_at = NOW()
             """,
             (key, value),
         )
 
 
 def get_config_value(key: str) -> Optional[str]:
-    with get_conn() as conn:
-        row = conn.execute(
-            "SELECT value FROM bot_config WHERE key = ?",
-            (key,),
-        ).fetchone()
+    with get_conn() as conn, conn.cursor(cursor_factory=RealDictCursor) as cur:
+        cur.execute("SELECT value FROM bot_config WHERE key = %s", (key,))
+        row = _fetchone_dict(cur)
         return row["value"] if row else None
 
 
 def get_all_registered_players():
-    with get_conn() as conn:
-        return conn.execute(
-            "SELECT minecraft_uuid, minecraft_username FROM players"
-        ).fetchall()
+    with get_conn() as conn, conn.cursor(cursor_factory=RealDictCursor) as cur:
+        cur.execute("SELECT uuid AS minecraft_uuid, mcid AS minecraft_username FROM verified_users")
+        return _fetchall_dict(cur)
 
 
 def upsert_player_stats(
@@ -321,8 +345,8 @@ def upsert_player_stats(
     kdr: float,
     head_image_base64: Optional[str] = None,
 ):
-    with get_conn() as conn:
-        conn.execute(
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute(
             """
             INSERT INTO player_stats (
                 minecraft_uuid,
@@ -343,25 +367,25 @@ def upsert_player_stats(
                 kdr,
                 head_image_base64,
                 last_updated
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW())
             ON CONFLICT(minecraft_uuid) DO UPDATE SET
-                minecraft_name=excluded.minecraft_name,
-                bedwars_star=excluded.bedwars_star,
-                wins=excluded.wins,
-                losses=excluded.losses,
-                final_kills=excluded.final_kills,
-                final_deaths=excluded.final_deaths,
-                beds_broken=excluded.beds_broken,
-                beds_lost=excluded.beds_lost,
-                kills=excluded.kills,
-                deaths=excluded.deaths,
-                games_played=excluded.games_played,
-                winstreak=excluded.winstreak,
-                fkdr=excluded.fkdr,
-                wlr=excluded.wlr,
-                kdr=excluded.kdr,
-                head_image_base64=COALESCE(excluded.head_image_base64, player_stats.head_image_base64),
-                last_updated=datetime('now')
+                minecraft_name = EXCLUDED.minecraft_name,
+                bedwars_star = EXCLUDED.bedwars_star,
+                wins = EXCLUDED.wins,
+                losses = EXCLUDED.losses,
+                final_kills = EXCLUDED.final_kills,
+                final_deaths = EXCLUDED.final_deaths,
+                beds_broken = EXCLUDED.beds_broken,
+                beds_lost = EXCLUDED.beds_lost,
+                kills = EXCLUDED.kills,
+                deaths = EXCLUDED.deaths,
+                games_played = EXCLUDED.games_played,
+                winstreak = EXCLUDED.winstreak,
+                fkdr = EXCLUDED.fkdr,
+                wlr = EXCLUDED.wlr,
+                kdr = EXCLUDED.kdr,
+                head_image_base64 = COALESCE(EXCLUDED.head_image_base64, player_stats.head_image_base64),
+                last_updated = NOW()
             """,
             (
                 minecraft_uuid,
@@ -386,8 +410,8 @@ def upsert_player_stats(
 
 
 def get_player_stats_by_uuid(minecraft_uuid: str):
-    with get_conn() as conn:
-        return conn.execute(
+    with get_conn() as conn, conn.cursor(cursor_factory=RealDictCursor) as cur:
+        cur.execute(
             """
             SELECT
                 minecraft_uuid,
@@ -397,10 +421,11 @@ def get_player_stats_by_uuid(minecraft_uuid: str):
                 head_image_base64,
                 last_updated
             FROM player_stats
-            WHERE minecraft_uuid = ?
+            WHERE minecraft_uuid = %s
             """,
             (minecraft_uuid,),
-        ).fetchone()
+        )
+        return _fetchone_dict(cur)
 
 
 def get_top_player_stats(metric: str, limit: int = 10):
@@ -418,8 +443,8 @@ def get_top_player_stats(metric: str, limit: int = 10):
     if not order_column:
         raise ValueError("Invalid ranking metric")
 
-    with get_conn() as conn:
-        return conn.execute(
+    with get_conn() as conn, conn.cursor(cursor_factory=RealDictCursor) as cur:
+        cur.execute(
             f"""
             SELECT
                 ps.minecraft_uuid,
@@ -441,23 +466,24 @@ def get_top_player_stats(metric: str, limit: int = 10):
                 ps.head_image_base64,
                 ps.last_updated
             FROM player_stats ps
-            INNER JOIN players p
-                ON p.minecraft_uuid = ps.minecraft_uuid
+            INNER JOIN verified_users vu
+                ON vu.uuid = ps.minecraft_uuid
             ORDER BY COALESCE(ps.{order_column}, 0) DESC, ps.minecraft_name ASC
-            LIMIT ?
+            LIMIT %s
             """,
             (limit,),
-        ).fetchall()
+        )
+        return _fetchall_dict(cur)
 
 
 def update_player_head_image(minecraft_uuid: str, head_image_base64: str):
-    with get_conn() as conn:
-        conn.execute(
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute(
             """
             UPDATE player_stats
-            SET head_image_base64 = ?,
-                last_updated = datetime('now')
-            WHERE minecraft_uuid = ?
+            SET head_image_base64 = %s,
+                last_updated = NOW()
+            WHERE minecraft_uuid = %s
             """,
             (head_image_base64, minecraft_uuid),
         )

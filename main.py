@@ -9,9 +9,9 @@ import discord
 import requests
 from discord import app_commands
 from flask import Flask
-from sqlite3 import IntegrityError
 
 from database import (
+    IntegrityError,
     delete_registered_player_data_by_uuid,
     delete_player_registration_by_uuid,
     get_all_registered_players,
