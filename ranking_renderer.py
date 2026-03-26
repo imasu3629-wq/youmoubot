@@ -15,6 +15,10 @@ DEFAULT_FONT_PATH = os.environ.get(
     "RANKING_FONT_PATH",
     os.path.join(os.path.dirname(os.path.abspath(__file__)), "Minecraftia.ttf"),
 )
+UNICODE_FALLBACK_FONT_PATHS = [
+    "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+    "/usr/share/fonts/dejavu/DejaVuSans.ttf",
+]
 
 MC_COLORS = {
     "black": "#000000",
@@ -132,10 +136,12 @@ def draw_multicolor_star_text(
     star: int,
     font: ImageFont.ImageFont,
 ) -> int:
+    symbol_font = _load_unicode_fallback_font(getattr(font, "size", 20))
     current_x = x
     for text, color in get_badge_parts(max(star, 0)):
-        draw.text((current_x, y), text, font=font, fill=color)
-        bbox = draw.textbbox((current_x, y), text, font=font)
+        current_font = symbol_font if text in {"✫", "✪", "⚝", "✥"} else font
+        draw.text((current_x, y), text, font=current_font, fill=color)
+        bbox = draw.textbbox((current_x, y), text, font=current_font)
         current_x = bbox[2]
     return current_x
 
@@ -176,6 +182,16 @@ def _load_font(size: int) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
             return ImageFont.truetype(DEFAULT_FONT_PATH, size=size)
         except OSError:
             pass
+    return ImageFont.load_default()
+
+
+def _load_unicode_fallback_font(size: int) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
+    for path in UNICODE_FALLBACK_FONT_PATHS:
+        if os.path.exists(path):
+            try:
+                return ImageFont.truetype(path, size=size)
+            except OSError:
+                continue
     return ImageFont.load_default()
 
 
