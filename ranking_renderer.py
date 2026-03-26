@@ -15,10 +15,9 @@ DEFAULT_FONT_PATH = os.environ.get(
     "RANKING_FONT_PATH",
     os.path.join(os.path.dirname(os.path.abspath(__file__)), "Minecraftia.ttf"),
 )
-UNICODE_FALLBACK_FONT_PATHS = [
-    "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-    "/usr/share/fonts/dejavu/DejaVuSans.ttf",
-]
+SYMBOL_FONT_PATH = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "fonts", "DejaVuSans.ttf"
+)
 
 MC_COLORS = {
     "black": "#000000",
@@ -114,35 +113,44 @@ def get_prestige_style(star: int) -> dict[str, Any]:
     return PRESTIGE_STYLES.get(get_prestige_key(star), PRESTIGE_STYLES[0])
 
 
-def get_badge_parts(star: int) -> list[tuple[str, str]]:
-    safe_star = max(star, 0)
-    style = get_prestige_style(safe_star)
-    parts = [("[", style["left_bracket_color"])]
-
-    digits = list(str(safe_star))
-    digit_colors = style["digit_colors"]
-    for i, ch in enumerate(digits):
-        parts.append((ch, digit_colors[min(i, len(digit_colors) - 1)]))
-
-    parts.append((get_star_symbol(safe_star), style["symbol_color"]))
-    parts.append(("]", style["right_bracket_color"]))
-    return parts
-
-
-def draw_multicolor_star_text(
+def draw_star_text(
     draw: ImageDraw.ImageDraw,
     x: int,
     y: int,
     star: int,
-    font: ImageFont.ImageFont,
+    digit_font: ImageFont.ImageFont,
+    symbol_font: ImageFont.ImageFont,
+    style: dict[str, Any],
 ) -> int:
-    symbol_font = _load_unicode_fallback_font(getattr(font, "size", 20))
+    safe_star = max(star, 0)
+    symbol = get_star_symbol(safe_star)
     current_x = x
-    for text, color in get_badge_parts(max(star, 0)):
-        current_font = symbol_font if text in {"✫", "✪", "⚝", "✥"} else font
-        draw.text((current_x, y), text, font=current_font, fill=color)
-        bbox = draw.textbbox((current_x, y), text, font=current_font)
+
+    draw.text((current_x, y), "[", font=digit_font, fill=style["left_bracket_color"])
+    bbox = draw.textbbox((current_x, y), "[", font=digit_font)
+    current_x = bbox[2]
+
+    digits = list(str(safe_star))
+    digit_colors = style["digit_colors"]
+    for i, ch in enumerate(digits):
+        color = digit_colors[min(i, len(digit_colors) - 1)]
+        draw.text((current_x, y), ch, font=digit_font, fill=color)
+        bbox = draw.textbbox((current_x, y), ch, font=digit_font)
         current_x = bbox[2]
+
+    symbol_bbox = draw.textbbox((current_x, y), symbol, font=symbol_font)
+    digit_bbox = draw.textbbox((0, 0), "0", font=digit_font)
+    digit_h = digit_bbox[3] - digit_bbox[1]
+    sym_h = symbol_bbox[3] - symbol_bbox[1]
+    symbol_y = y + int((digit_h - sym_h) / 2)
+
+    draw.text((current_x, symbol_y), symbol, font=symbol_font, fill=style["symbol_color"])
+    current_x = symbol_bbox[2]
+
+    draw.text((current_x, y), "]", font=digit_font, fill=style["right_bracket_color"])
+    bbox = draw.textbbox((current_x, y), "]", font=digit_font)
+    current_x = bbox[2]
+
     return current_x
 
 
@@ -185,13 +193,12 @@ def _load_font(size: int) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
     return ImageFont.load_default()
 
 
-def _load_unicode_fallback_font(size: int) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
-    for path in UNICODE_FALLBACK_FONT_PATHS:
-        if os.path.exists(path):
-            try:
-                return ImageFont.truetype(path, size=size)
-            except OSError:
-                continue
+def _load_symbol_font(size: int) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
+    if os.path.exists(SYMBOL_FONT_PATH):
+        try:
+            return ImageFont.truetype(SYMBOL_FONT_PATH, size=size)
+        except OSError:
+            pass
     return ImageFont.load_default()
 
 
@@ -299,6 +306,7 @@ def render_ranking_image(rows: list[Any], metric: str) -> io.BytesIO:
     header_font = _load_font(18)
     body_font = _load_font(20)
     badge_font = _load_font(20)
+    symbol_font = _load_symbol_font(20)
     footer_font = _load_font(14)
 
     meta = RANKING_META[metric]
@@ -321,7 +329,15 @@ def render_ranking_image(rows: list[Any], metric: str) -> io.BytesIO:
         draw.text((140, y + 8), name, font=body_font, fill="#FFFFFF")
 
         star = _safe_int(row["bedwars_star"])
-        draw_multicolor_star_text(draw, 380, y + 8, star, badge_font)
+        draw_star_text(
+            draw,
+            380,
+            y + 8,
+            star,
+            badge_font,
+            symbol_font,
+            get_prestige_style(max(star, 0)),
+        )
 
         metric_value = _extract_metric_value(row, metric)
         value_text = _format_metric_value(metric_value, meta["decimals"])
@@ -344,6 +360,7 @@ def render_stats_image(row: Any) -> io.BytesIO:
     title_font = _load_font(28)
     body_font = _load_font(24)
     badge_font = _load_font(32)
+    symbol_font = _load_symbol_font(32)
     small_font = _load_font(16)
 
     draw.rounded_rectangle((20, 20, width - 20, height - 20), radius=12, fill=(18, 18, 18, 255))
@@ -354,7 +371,16 @@ def render_stats_image(row: Any) -> io.BytesIO:
 
     name = str(row["minecraft_name"] or "Unknown")
     draw.text((170, 100), f"Player: {name}", font=body_font, fill="#FFFFFF")
-    draw_multicolor_star_text(draw, 170, 145, _safe_int(row["bedwars_star"]), badge_font)
+    star = _safe_int(row["bedwars_star"])
+    draw_star_text(
+        draw,
+        170,
+        145,
+        star,
+        badge_font,
+        symbol_font,
+        get_prestige_style(max(star, 0)),
+    )
     draw.text((170, 195), f"FKDR: {_safe_float(row['fkdr']):.2f}", font=body_font, fill="#55FFFF")
     draw.text((40, 245), f"Last Updated: {row['last_updated'] or 'N/A'}", font=small_font, fill="#AAAAAA")
 
