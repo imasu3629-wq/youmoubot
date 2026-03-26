@@ -16,58 +16,129 @@ DEFAULT_FONT_PATH = os.environ.get(
     os.path.join(os.path.dirname(os.path.abspath(__file__)), "Minecraftia.ttf"),
 )
 
-PRESTIGE_STYLES = {
-    100: {"symbol": "✫", "leftBracket": "#FFFFFF", "digits": ["#FFFFFF", "#FFFFFF", "#FFFFFF"], "symbolColor": "#AAAAAA", "rightBracket": "#FFFFFF"},
-    200: {"symbol": "✫", "leftBracket": "#FFAA00", "digits": ["#FFAA00", "#FFAA00", "#FFAA00"], "symbolColor": "#FFAA00", "rightBracket": "#FFAA00"},
-    300: {"symbol": "✫", "leftBracket": "#55FFFF", "digits": ["#55FFFF", "#55FFFF", "#55FFFF"], "symbolColor": "#55FFFF", "rightBracket": "#55FFFF"},
-    400: {"symbol": "✫", "leftBracket": "#00AA00", "digits": ["#00AA00", "#00AA00", "#00AA00"], "symbolColor": "#00AA00", "rightBracket": "#00AA00"},
-    500: {"symbol": "✫", "leftBracket": "#00AAAA", "digits": ["#00AAAA", "#00AAAA", "#00AAAA"], "symbolColor": "#00AAAA", "rightBracket": "#00AAAA"},
-    600: {"symbol": "✫", "leftBracket": "#AA0000", "digits": ["#AA0000", "#AA0000", "#AA0000"], "symbolColor": "#AA0000", "rightBracket": "#AA0000"},
-    700: {"symbol": "✫", "leftBracket": "#FF55FF", "digits": ["#FF55FF", "#FF55FF", "#FF55FF"], "symbolColor": "#FF55FF", "rightBracket": "#FF55FF"},
-    800: {"symbol": "✫", "leftBracket": "#5555FF", "digits": ["#5555FF", "#5555FF", "#5555FF"], "symbolColor": "#5555FF", "rightBracket": "#5555FF"},
-    900: {"symbol": "✫", "leftBracket": "#AA00AA", "digits": ["#AA00AA", "#AA00AA", "#AA00AA"], "symbolColor": "#AA00AA", "rightBracket": "#AA00AA"},
-    1000: {"symbol": "✫", "leftBracket": "#FF5555", "digits": ["#FFAA00", "#55FF55", "#55FFFF"], "symbolColor": "#FF55FF", "rightBracket": "#AA00AA"},
-    1100: {"symbol": "✪", "leftBracket": "#AAAAAA", "digits": ["#FFFFFF", "#FFFFFF", "#FFFFFF", "#FFFFFF"], "symbolColor": "#AAAAAA", "rightBracket": "#AAAAAA"},
-    1200: {"symbol": "✪", "leftBracket": "#AAAAAA", "digits": ["#FFFF55", "#FFFF55", "#FFFF55", "#FFFF55"], "symbolColor": "#FFAA00", "rightBracket": "#AAAAAA"},
-    1300: {"symbol": "✪", "leftBracket": "#AAAAAA", "digits": ["#55FFFF", "#55FFFF", "#55FFFF", "#55FFFF"], "symbolColor": "#00AAAA", "rightBracket": "#AAAAAA"},
-    1400: {"symbol": "✪", "leftBracket": "#AAAAAA", "digits": ["#55FF55", "#55FF55", "#55FF55", "#55FF55"], "symbolColor": "#00AA00", "rightBracket": "#AAAAAA"},
-    1500: {"symbol": "✪", "leftBracket": "#AAAAAA", "digits": ["#00AAAA", "#00AAAA", "#00AAAA", "#00AAAA"], "symbolColor": "#5555FF", "rightBracket": "#AAAAAA"},
-    1600: {"symbol": "✪", "leftBracket": "#AAAAAA", "digits": ["#FF5555", "#FF5555", "#FF5555", "#FF5555"], "symbolColor": "#AA0000", "rightBracket": "#AAAAAA"},
-    1700: {"symbol": "✪", "leftBracket": "#AAAAAA", "digits": ["#FF55FF", "#FF55FF", "#FF55FF", "#FF55FF"], "symbolColor": "#AA00AA", "rightBracket": "#AAAAAA"},
-    1800: {"symbol": "✪", "leftBracket": "#AAAAAA", "digits": ["#5555FF", "#5555FF", "#5555FF", "#5555FF"], "symbolColor": "#0000AA", "rightBracket": "#AAAAAA"},
-    1900: {"symbol": "✪", "leftBracket": "#AAAAAA", "digits": ["#AA00AA", "#AA00AA", "#AA00AA", "#AA00AA"], "symbolColor": "#555555", "rightBracket": "#AAAAAA"},
-    2000: {"symbol": "✪", "leftBracket": "#555555", "digits": ["#AAAAAA", "#FFFFFF", "#FFFFFF", "#AAAAAA"], "symbolColor": "#FFFFFF", "rightBracket": "#555555"},
-    2100: {"symbol": "⚝", "leftBracket": "#FFFFFF", "digits": ["#FFFF55", "#FFFF55", "#FFAA00", "#FFAA00"], "symbolColor": "#FFAA00", "rightBracket": "#FFAA00"},
-    2200: {"symbol": "⚝", "leftBracket": "#FFAA00", "digits": ["#FFFFFF", "#FFFFFF", "#55FFFF", "#00AAAA"], "symbolColor": "#00AAAA", "rightBracket": "#00AAAA"},
-    2300: {"symbol": "⚝", "leftBracket": "#AA00AA", "digits": ["#FF55FF", "#FF55FF", "#FFAA00", "#FFFF55"], "symbolColor": "#FFFF55", "rightBracket": "#FFFF55"},
-    2400: {"symbol": "⚝", "leftBracket": "#55FFFF", "digits": ["#FFFFFF", "#FFFFFF", "#AAAAAA", "#AAAAAA"], "symbolColor": "#FFFFFF", "rightBracket": "#555555"},
-    2500: {"symbol": "⚝", "leftBracket": "#FFFFFF", "digits": ["#55FF55", "#55FF55", "#00AA00", "#00AA00"], "symbolColor": "#00AA00", "rightBracket": "#00AA00"},
-    2600: {"symbol": "⚝", "leftBracket": "#AA0000", "digits": ["#FF5555", "#FF5555", "#FF55FF", "#FF55FF"], "symbolColor": "#FF55FF", "rightBracket": "#AA00AA"},
-    2700: {"symbol": "⚝", "leftBracket": "#FFFF55", "digits": ["#FFFF55", "#555555", "#555555", "#AAAAAA"], "symbolColor": "#AAAAAA", "rightBracket": "#555555"},
-    2800: {"symbol": "⚝", "leftBracket": "#55FF55", "digits": ["#55FF55", "#00AA00", "#FFAA00", "#FFAA00"], "symbolColor": "#FFAA00", "rightBracket": "#FFFF55"},
-    2900: {"symbol": "⚝", "leftBracket": "#55FFFF", "digits": ["#00AAAA", "#00AAAA", "#5555FF", "#5555FF"], "symbolColor": "#5555FF", "rightBracket": "#0000AA"},
-    3000: {"symbol": "⚝", "leftBracket": "#FFFF55", "digits": ["#FFAA00", "#FFAA00", "#FF5555", "#FF5555"], "symbolColor": "#FF5555", "rightBracket": "#AA0000"},
-    3100: {"symbol": "✥", "leftBracket": "#5555FF", "digits": ["#5555FF", "#55FFFF", "#FFAA00", "#FFFF55"], "symbolColor": "#FFAA00", "rightBracket": "#FFFF55"},
-    3200: {"symbol": "✥", "leftBracket": "#FFAA00", "digits": ["#FFAA00", "#FFFFFF", "#FFFFFF", "#AAAAAA"], "symbolColor": "#AAAAAA", "rightBracket": "#AAAAAA"},
-    3300: {"symbol": "✥", "leftBracket": "#5555FF", "digits": ["#5555FF", "#FF55FF", "#FF5555", "#FF5555"], "symbolColor": "#FF5555", "rightBracket": "#FF5555"},
-    3400: {"symbol": "✥", "leftBracket": "#00AA00", "digits": ["#55FF55", "#FF55FF", "#AA00AA", "#AA00AA"], "symbolColor": "#AA00AA", "rightBracket": "#00AA00"},
-    3500: {"symbol": "✥", "leftBracket": "#FF5555", "digits": ["#FF5555", "#FFAA00", "#55FF55", "#55FF55"], "symbolColor": "#55FF55", "rightBracket": "#55FF55"},
-    3600: {"symbol": "✥", "leftBracket": "#55FF55", "digits": ["#55FF55", "#55FFFF", "#5555FF", "#5555FF"], "symbolColor": "#5555FF", "rightBracket": "#0000AA"},
-    3700: {"symbol": "✥", "leftBracket": "#AA0000", "digits": ["#AA0000", "#55FFFF", "#00AAAA", "#00AAAA"], "symbolColor": "#00AAAA", "rightBracket": "#00AAAA"},
-    3800: {"symbol": "✥", "leftBracket": "#0000AA", "digits": ["#5555FF", "#FF55FF", "#FF55FF", "#AA00AA"], "symbolColor": "#FF55FF", "rightBracket": "#0000AA"},
-    3900: {"symbol": "✥", "leftBracket": "#FF5555", "digits": ["#FF5555", "#55FFFF", "#55FFFF", "#5555FF"], "symbolColor": "#5555FF", "rightBracket": "#555555"},
-    4000: {"symbol": "✥", "leftBracket": "#AA00AA", "digits": ["#FF55FF", "#FFAA00", "#FFAA00", "#FFFF55"], "symbolColor": "#FFAA00", "rightBracket": "#FFFF55"},
-    4100: {"symbol": "✥", "leftBracket": "#FFFF55", "digits": ["#FF5555", "#FF5555", "#FF55FF", "#FF55FF"], "symbolColor": "#FF55FF", "rightBracket": "#AA00AA"},
-    4200: {"symbol": "✥", "leftBracket": "#0000AA", "digits": ["#55FFFF", "#55FFFF", "#FFFFFF", "#FFFFFF"], "symbolColor": "#AAAAAA", "rightBracket": "#AAAAAA"},
-    4300: {"symbol": "✥", "leftBracket": "#000000", "digits": ["#555555", "#555555", "#AA00AA", "#AA00AA"], "symbolColor": "#AA00AA", "rightBracket": "#000000"},
-    4400: {"symbol": "✥", "leftBracket": "#00AA00", "digits": ["#AAAAAA", "#AAAAAA", "#FFAA00", "#FFAA00"], "symbolColor": "#AA00AA", "rightBracket": "#FF55FF"},
-    4500: {"symbol": "✥", "leftBracket": "#FFFFFF", "digits": ["#FFFFFF", "#FFFFFF", "#55FFFF", "#00AAAA"], "symbolColor": "#55FFFF", "rightBracket": "#00AAAA"},
-    4600: {"symbol": "✥", "leftBracket": "#00AAAA", "digits": ["#AAAAAA", "#FFFF55", "#FFAA00", "#FFAA00"], "symbolColor": "#AA00AA", "rightBracket": "#FF55FF"},
-    4700: {"symbol": "✥", "leftBracket": "#AAAAAA", "digits": ["#FF5555", "#FF5555", "#5555FF", "#5555FF"], "symbolColor": "#0000AA", "rightBracket": "#AAAAAA"},
-    4800: {"symbol": "✥", "leftBracket": "#AA00AA", "digits": ["#FF5555", "#FFAA00", "#FFFF55", "#55FFFF"], "symbolColor": "#55FFFF", "rightBracket": "#00AAAA"},
-    4900: {"symbol": "✥", "leftBracket": "#55FF55", "digits": ["#AAAAAA", "#AAAAAA", "#AAAAAA", "#FFFFFF"], "symbolColor": "#55FF55", "rightBracket": "#55FF55"},
-    5000: {"symbol": "✥", "leftBracket": "#AA0000", "digits": ["#FF5555", "#AA00AA", "#5555FF", "#5555FF"], "symbolColor": "#0000AA", "rightBracket": "#000000"},
+MC_COLORS = {
+    "black": "#000000",
+    "dark_blue": "#0000AA",
+    "dark_green": "#00AA00",
+    "dark_aqua": "#00AAAA",
+    "dark_red": "#AA0000",
+    "dark_purple": "#AA00AA",
+    "gold": "#FFAA00",
+    "gray": "#AAAAAA",
+    "dark_gray": "#555555",
+    "blue": "#5555FF",
+    "green": "#55FF55",
+    "aqua": "#55FFFF",
+    "red": "#FF5555",
+    "light_purple": "#FF55FF",
+    "yellow": "#FFFF55",
+    "white": "#FFFFFF",
 }
+
+PRESTIGE_STYLES = {
+    0: {"left_bracket_color": "#AAAAAA", "digit_colors": ["#AAAAAA"], "symbol_color": "#AAAAAA", "right_bracket_color": "#AAAAAA"},
+    100: {"left_bracket_color": "#AAAAAA", "digit_colors": ["#FFFFFF", "#FFFFFF", "#FFFFFF"], "symbol_color": "#AAAAAA", "right_bracket_color": "#AAAAAA"},
+    200: {"left_bracket_color": "#FFAA00", "digit_colors": ["#FFAA00", "#FFAA00", "#FFAA00"], "symbol_color": "#FFAA00", "right_bracket_color": "#FFAA00"},
+    300: {"left_bracket_color": "#55FFFF", "digit_colors": ["#55FFFF", "#55FFFF", "#55FFFF"], "symbol_color": "#55FFFF", "right_bracket_color": "#55FFFF"},
+    400: {"left_bracket_color": "#00AA00", "digit_colors": ["#00AA00", "#00AA00", "#00AA00"], "symbol_color": "#00AA00", "right_bracket_color": "#00AA00"},
+    500: {"left_bracket_color": "#00AAAA", "digit_colors": ["#00AAAA", "#00AAAA", "#00AAAA"], "symbol_color": "#00AAAA", "right_bracket_color": "#00AAAA"},
+    600: {"left_bracket_color": "#AA0000", "digit_colors": ["#AA0000", "#AA0000", "#AA0000"], "symbol_color": "#AA0000", "right_bracket_color": "#AA0000"},
+    700: {"left_bracket_color": "#FF55FF", "digit_colors": ["#FF55FF", "#FF55FF", "#FF55FF"], "symbol_color": "#FF55FF", "right_bracket_color": "#FF55FF"},
+    800: {"left_bracket_color": "#5555FF", "digit_colors": ["#5555FF", "#5555FF", "#5555FF"], "symbol_color": "#5555FF", "right_bracket_color": "#5555FF"},
+    900: {"left_bracket_color": "#AA00AA", "digit_colors": ["#AA00AA", "#AA00AA", "#AA00AA"], "symbol_color": "#AA00AA", "right_bracket_color": "#AA00AA"},
+    1000: {"left_bracket_color": "#FF5555", "digit_colors": ["#FFAA00", "#FFFF55", "#55FFFF", "#FF55FF"], "symbol_color": "#FF55FF", "right_bracket_color": "#AA00AA"},
+    1100: {"left_bracket_color": "#AAAAAA", "digit_colors": ["#FFFFFF", "#FFFFFF", "#FFFFFF", "#FFFFFF"], "symbol_color": "#AAAAAA", "right_bracket_color": "#AAAAAA"},
+    1200: {"left_bracket_color": "#AAAAAA", "digit_colors": ["#FFFF55", "#FFFF55", "#FFAA00", "#FFAA00"], "symbol_color": "#FFAA00", "right_bracket_color": "#AAAAAA"},
+    1300: {"left_bracket_color": "#AAAAAA", "digit_colors": ["#55FFFF", "#55FFFF", "#00AAAA", "#00AAAA"], "symbol_color": "#00AAAA", "right_bracket_color": "#AAAAAA"},
+    1400: {"left_bracket_color": "#AAAAAA", "digit_colors": ["#55FF55", "#55FF55", "#00AA00", "#00AA00"], "symbol_color": "#00AA00", "right_bracket_color": "#AAAAAA"},
+    1500: {"left_bracket_color": "#AAAAAA", "digit_colors": ["#55FFFF", "#55FFFF", "#5555FF", "#5555FF"], "symbol_color": "#5555FF", "right_bracket_color": "#AAAAAA"},
+    1600: {"left_bracket_color": "#AAAAAA", "digit_colors": ["#FF5555", "#FF5555", "#AA0000", "#AA0000"], "symbol_color": "#AA0000", "right_bracket_color": "#AAAAAA"},
+    1700: {"left_bracket_color": "#AAAAAA", "digit_colors": ["#FF55FF", "#FF55FF", "#AA00AA", "#AA00AA"], "symbol_color": "#AA00AA", "right_bracket_color": "#AAAAAA"},
+    1800: {"left_bracket_color": "#AAAAAA", "digit_colors": ["#5555FF", "#5555FF", "#0000AA", "#0000AA"], "symbol_color": "#0000AA", "right_bracket_color": "#AAAAAA"},
+    1900: {"left_bracket_color": "#AAAAAA", "digit_colors": ["#FF55FF", "#FF55FF", "#AA00AA", "#555555"], "symbol_color": "#555555", "right_bracket_color": "#AAAAAA"},
+    2000: {"left_bracket_color": "#AAAAAA", "digit_colors": ["#FFFFFF", "#FFFFFF", "#FFFFFF", "#FFFFFF"], "symbol_color": "#AAAAAA", "right_bracket_color": "#AAAAAA"},
+    2100: {"left_bracket_color": "#FFAA00", "digit_colors": ["#555555", "#FFFF55", "#FFFF55", "#FFAA00"], "symbol_color": "#FFAA00", "right_bracket_color": "#FFAA00"},
+    2200: {"left_bracket_color": "#FFAA00", "digit_colors": ["#FFFFFF", "#FFFFFF", "#55FFFF", "#55FFFF"], "symbol_color": "#00AAAA", "right_bracket_color": "#00AAAA"},
+    2300: {"left_bracket_color": "#AA00AA", "digit_colors": ["#AA00AA", "#AA00AA", "#FFFF55", "#FFFF55"], "symbol_color": "#FFFF55", "right_bracket_color": "#FFFF55"},
+    2400: {"left_bracket_color": "#55FFFF", "digit_colors": ["#55FFFF", "#555555", "#FFFFFF", "#FFFFFF"], "symbol_color": "#AAAAAA", "right_bracket_color": "#555555"},
+    2500: {"left_bracket_color": "#FFFFFF", "digit_colors": ["#55FF55", "#55FF55", "#55FF55", "#55FF55"], "symbol_color": "#00AA00", "right_bracket_color": "#00AA00"},
+    2600: {"left_bracket_color": "#AA0000", "digit_colors": ["#AA0000", "#AA0000", "#FF55FF", "#FF55FF"], "symbol_color": "#FF55FF", "right_bracket_color": "#FF55FF"},
+    2700: {"left_bracket_color": "#FFFF55", "digit_colors": ["#FFFF55", "#555555", "#555555", "#AAAAAA"], "symbol_color": "#AAAAAA", "right_bracket_color": "#555555"},
+    2800: {"left_bracket_color": "#55FF55", "digit_colors": ["#55FF55", "#55FF55", "#FFAA00", "#FFAA00"], "symbol_color": "#FFAA00", "right_bracket_color": "#FFFF55"},
+    2900: {"left_bracket_color": "#55FFFF", "digit_colors": ["#55FFFF", "#55FFFF", "#5555FF", "#5555FF"], "symbol_color": "#5555FF", "right_bracket_color": "#5555FF"},
+    3000: {"left_bracket_color": "#FFFF55", "digit_colors": ["#FFAA00", "#FFAA00", "#FF5555", "#FF5555"], "symbol_color": "#FF5555", "right_bracket_color": "#AA0000"},
+    3100: {"left_bracket_color": "#5555FF", "digit_colors": ["#5555FF", "#55FFFF", "#55FFFF", "#FFAA00"], "symbol_color": "#FFAA00", "right_bracket_color": "#FFFF55"},
+    3200: {"left_bracket_color": "#AA0000", "digit_colors": ["#FFFFFF", "#FFFFFF", "#AA0000", "#AA0000"], "symbol_color": "#FF5555", "right_bracket_color": "#FF5555"},
+    3300: {"left_bracket_color": "#5555FF", "digit_colors": ["#FF55FF", "#FF55FF", "#FF5555", "#FF5555"], "symbol_color": "#FF5555", "right_bracket_color": "#AA0000"},
+    3400: {"left_bracket_color": "#55FF55", "digit_colors": ["#FF55FF", "#FF55FF", "#FF55FF", "#FF55FF"], "symbol_color": "#AA00AA", "right_bracket_color": "#00AA00"},
+    3500: {"left_bracket_color": "#FF5555", "digit_colors": ["#FF5555", "#FF5555", "#55FF55", "#55FF55"], "symbol_color": "#55FF55", "right_bracket_color": "#55FF55"},
+    3600: {"left_bracket_color": "#55FF55", "digit_colors": ["#FF55FF", "#FF55FF", "#5555FF", "#5555FF"], "symbol_color": "#5555FF", "right_bracket_color": "#0000AA"},
+    3700: {"left_bracket_color": "#AA0000", "digit_colors": ["#55FFFF", "#55FFFF", "#00AAAA", "#00AAAA"], "symbol_color": "#00AAAA", "right_bracket_color": "#00AAAA"},
+    3800: {"left_bracket_color": "#0000AA", "digit_colors": ["#000000", "#FF55FF", "#FF55FF", "#FF55FF"], "symbol_color": "#FF55FF", "right_bracket_color": "#0000AA"},
+    3900: {"left_bracket_color": "#FF5555", "digit_colors": ["#FF5555", "#55FFFF", "#55FFFF", "#5555FF"], "symbol_color": "#5555FF", "right_bracket_color": "#5555FF"},
+    4000: {"left_bracket_color": "#AA00AA", "digit_colors": ["#FF5555", "#FF5555", "#FFAA00", "#FFAA00"], "symbol_color": "#FFAA00", "right_bracket_color": "#FFFF55"},
+    4100: {"left_bracket_color": "#FFFF55", "digit_colors": ["#FFFF55", "#FFFF55", "#FF55FF", "#FF55FF"], "symbol_color": "#FF55FF", "right_bracket_color": "#FF55FF"},
+    4200: {"left_bracket_color": "#0000AA", "digit_colors": ["#55FFFF", "#55FFFF", "#AAAAAA", "#AAAAAA"], "symbol_color": "#AAAAAA", "right_bracket_color": "#AAAAAA"},
+    4300: {"left_bracket_color": "#55FF55", "digit_colors": ["#55FF55", "#55FF55", "#FFAA00", "#FFAA00"], "symbol_color": "#AA00AA", "right_bracket_color": "#FF55FF"},
+    4400: {"left_bracket_color": "#55FF55", "digit_colors": ["#55FF55", "#FFAA00", "#FFAA00", "#FF55FF"], "symbol_color": "#FF55FF", "right_bracket_color": "#FF55FF"},
+    4500: {"left_bracket_color": "#FFFFFF", "digit_colors": ["#FFFFFF", "#00AAAA", "#00AAAA", "#55FFFF"], "symbol_color": "#00AAAA", "right_bracket_color": "#55FFFF"},
+    4600: {"left_bracket_color": "#00AAAA", "digit_colors": ["#00AAAA", "#FFFF55", "#FFAA00", "#FFAA00"], "symbol_color": "#FF55FF", "right_bracket_color": "#FF55FF"},
+    4700: {"left_bracket_color": "#FFFFFF", "digit_colors": ["#FF5555", "#FF5555", "#0000AA", "#0000AA"], "symbol_color": "#0000AA", "right_bracket_color": "#5555FF"},
+    4800: {"left_bracket_color": "#AA00AA", "digit_colors": ["#FF5555", "#FFAA00", "#55FFFF", "#55FFFF"], "symbol_color": "#55FFFF", "right_bracket_color": "#00AAAA"},
+    4900: {"left_bracket_color": "#55FF55", "digit_colors": ["#FFFFFF", "#FFFFFF", "#FFFFFF", "#55FF55"], "symbol_color": "#55FF55", "right_bracket_color": "#55FF55"},
+    5000: {"left_bracket_color": "#AA0000", "digit_colors": ["#FF5555", "#AA00AA", "#5555FF", "#5555FF"], "symbol_color": "#0000AA", "right_bracket_color": "#000000"},
+}
+
+
+def get_star_symbol(star: int) -> str:
+    if star >= 3100:
+        return "✥"
+    elif star >= 2100:
+        return "⚝"
+    elif star >= 1100:
+        return "✪"
+    return "✫"
+
+
+def get_prestige_key(star: int) -> int:
+    if star >= 5000:
+        return 5000
+    return (star // 100) * 100
+
+
+def get_prestige_style(star: int) -> dict[str, Any]:
+    return PRESTIGE_STYLES.get(get_prestige_key(star), PRESTIGE_STYLES[0])
+
+
+def get_badge_parts(star: int) -> list[tuple[str, str]]:
+    safe_star = max(star, 0)
+    style = get_prestige_style(safe_star)
+    parts = [("[", style["left_bracket_color"])]
+
+    digits = list(str(safe_star))
+    digit_colors = style["digit_colors"]
+    for i, ch in enumerate(digits):
+        parts.append((ch, digit_colors[min(i, len(digit_colors) - 1)]))
+
+    parts.append((get_star_symbol(safe_star), style["symbol_color"]))
+    parts.append(("]", style["right_bracket_color"]))
+    return parts
+
+
+def draw_multicolor_star_text(
+    draw: ImageDraw.ImageDraw,
+    x: int,
+    y: int,
+    star: int,
+    font: ImageFont.ImageFont,
+) -> int:
+    current_x = x
+    for text, color in get_badge_parts(max(star, 0)):
+        draw.text((current_x, y), text, font=font, fill=color)
+        bbox = draw.textbbox((current_x, y), text, font=font)
+        current_x = bbox[2]
+    return current_x
+
 
 RANKING_META = {
     "fkdr": {"title": "Bedwars FKDR Ranking", "label": "FKDR", "decimals": 2},
@@ -106,87 +177,6 @@ def _load_font(size: int) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
         except OSError:
             pass
     return ImageFont.load_default()
-
-
-def _normalized_tier(star: int) -> int:
-    if star < 100:
-        return 100
-    return min((star // 100) * 100, 5000)
-
-
-def _get_prestige_style(star: int) -> dict[str, Any]:
-    tier = _normalized_tier(star)
-    return PRESTIGE_STYLES.get(tier, PRESTIGE_STYLES[100])
-
-
-def _get_star_emblem(star: int) -> str:
-    if star >= 3100:
-        return "✥"
-    if star >= 2100:
-        return "⚝"
-    if star >= 1100:
-        return "✪"
-    return "✫"
-
-
-def get_badge_parts(star: int) -> list[tuple[str, str]]:
-    style = _get_prestige_style(star)
-    star_text = str(max(star, 0))
-    emblem = _get_star_emblem(max(star, 0))
-
-    parts = [
-        ("[", style["leftBracket"]),
-    ]
-
-    digit_colors = style["digits"]
-    for i, digit in enumerate(star_text):
-        color_index = min(i, len(digit_colors) - 1)
-        parts.append((digit, digit_colors[color_index]))
-
-    parts.extend(
-        [
-            (emblem, style["symbolColor"]),
-            ("]", style["rightBracket"]),
-        ]
-    )
-    return parts
-
-
-def _hex_to_ansi_color(hex_color: str) -> int:
-    color_map = {
-        "#000000": 30,
-        "#AA0000": 31,
-        "#00AA00": 32,
-        "#FFAA00": 33,
-        "#0000AA": 34,
-        "#AA00AA": 35,
-        "#00AAAA": 36,
-        "#AAAAAA": 37,
-        "#555555": 90,
-        "#FF5555": 91,
-        "#55FF55": 92,
-        "#FFFF55": 93,
-        "#5555FF": 94,
-        "#FF55FF": 95,
-        "#55FFFF": 96,
-        "#FFFFFF": 97,
-    }
-    return color_map.get(hex_color.upper(), 37)
-
-
-def render_badge_ansi(star: int) -> str:
-    colored = "".join(
-        f"\u001b[{_hex_to_ansi_color(color)}m{text}" for text, color in get_badge_parts(star)
-    )
-    return f"{colored}\u001b[0m"
-
-
-def _draw_badge(draw: ImageDraw.ImageDraw, x: int, y: int, star: int, font: ImageFont.ImageFont):
-    cursor_x = x
-    for text, color in get_badge_parts(star):
-        draw.text((cursor_x, y), text, font=font, fill=color)
-        bbox = draw.textbbox((cursor_x, y), text, font=font)
-        cursor_x += bbox[2] - bbox[0]
 
 
 def _extract_head_from_skin_bytes(skin_bytes: bytes) -> str | None:
@@ -315,7 +305,7 @@ def render_ranking_image(rows: list[Any], metric: str) -> io.BytesIO:
         draw.text((140, y + 8), name, font=body_font, fill="#FFFFFF")
 
         star = _safe_int(row["bedwars_star"])
-        _draw_badge(draw, 380, y + 8, star, badge_font)
+        draw_multicolor_star_text(draw, 380, y + 8, star, badge_font)
 
         metric_value = _extract_metric_value(row, metric)
         value_text = _format_metric_value(metric_value, meta["decimals"])
@@ -348,7 +338,7 @@ def render_stats_image(row: Any) -> io.BytesIO:
 
     name = str(row["minecraft_name"] or "Unknown")
     draw.text((170, 100), f"Player: {name}", font=body_font, fill="#FFFFFF")
-    _draw_badge(draw, 170, 145, _safe_int(row["bedwars_star"]), badge_font)
+    draw_multicolor_star_text(draw, 170, 145, _safe_int(row["bedwars_star"]), badge_font)
     draw.text((170, 195), f"FKDR: {_safe_float(row['fkdr']):.2f}", font=body_font, fill="#55FFFF")
     draw.text((40, 245), f"Last Updated: {row['last_updated'] or 'N/A'}", font=small_font, fill="#AAAAAA")
 

@@ -33,7 +33,6 @@ from database import (
 from ranking_renderer import (
     RankingRenderError,
     fetch_head_base64_from_uuid,
-    render_badge_ansi,
     render_ranking_image,
     render_stats_image,
 )
@@ -692,10 +691,7 @@ async def stats(interaction: discord.Interaction, mcid: str):
         image_bytes = render_stats_image(row)
         filename = f"bedwars_stats_{_sanitize_filename(str(row['minecraft_name']))}.png"
         file = discord.File(image_bytes, filename=filename)
-        badge = render_badge_ansi(_safe_int(row["bedwars_star"]))
-        fkdr_value = float(row["fkdr"] or 0)
-        message = f"```ansi\n{badge}\n```\nFKDR: {fkdr_value:.2f}"
-        await interaction.followup.send(content=message, file=file)
+        await interaction.followup.send(file=file)
     except VerificationError as error:
         await interaction.followup.send(error.message)
     except requests.RequestException:
