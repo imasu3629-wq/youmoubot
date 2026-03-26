@@ -1,4 +1,5 @@
 import os
+import hashlib
 from contextlib import contextmanager
 from typing import Any, Iterator, Optional
 
@@ -54,13 +55,34 @@ def init_db():
         cur.execute(
             """
             CREATE TABLE IF NOT EXISTS verified_users (
-                discord_user_id TEXT PRIMARY KEY,
-                mcid TEXT UNIQUE NOT NULL,
-                uuid TEXT UNIQUE,
-                registered_at TIMESTAMP DEFAULT NOW()
+                id SERIAL PRIMARY KEY,
+                discord_user_id BIGINT UNIQUE NOT NULL,
+                mcid VARCHAR(32) UNIQUE NOT NULL,
+                uuid VARCHAR(36),
+                hypixel_discord_tag VARCHAR(64),
+                head_base64 TEXT,
+                fkdr DOUBLE PRECISION,
+                wins INTEGER,
+                losses INTEGER,
+                final_kills INTEGER,
+                final_deaths INTEGER,
+                bedwars_star INTEGER,
+                verified_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
             """
         )
+        cur.execute("ALTER TABLE verified_users ADD COLUMN IF NOT EXISTS id SERIAL")
+        cur.execute("ALTER TABLE verified_users ADD COLUMN IF NOT EXISTS hypixel_discord_tag VARCHAR(64)")
+        cur.execute("ALTER TABLE verified_users ADD COLUMN IF NOT EXISTS head_base64 TEXT")
+        cur.execute("ALTER TABLE verified_users ADD COLUMN IF NOT EXISTS fkdr DOUBLE PRECISION")
+        cur.execute("ALTER TABLE verified_users ADD COLUMN IF NOT EXISTS wins INTEGER")
+        cur.execute("ALTER TABLE verified_users ADD COLUMN IF NOT EXISTS losses INTEGER")
+        cur.execute("ALTER TABLE verified_users ADD COLUMN IF NOT EXISTS final_kills INTEGER")
+        cur.execute("ALTER TABLE verified_users ADD COLUMN IF NOT EXISTS final_deaths INTEGER")
+        cur.execute("ALTER TABLE verified_users ADD COLUMN IF NOT EXISTS bedwars_star INTEGER")
+        cur.execute("ALTER TABLE verified_users ADD COLUMN IF NOT EXISTS verified_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
+        cur.execute("ALTER TABLE verified_users ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
         cur.execute(
             """
             CREATE TABLE IF NOT EXISTS players (
@@ -116,8 +138,9 @@ def init_db():
         cur.execute("CREATE INDEX IF NOT EXISTS idx_player_stats_name ON player_stats (minecraft_name)")
 
 
-def _admin_shadow_id(minecraft_uuid: str) -> str:
-    return f"admin:{minecraft_uuid}"
+def _admin_shadow_id(minecraft_uuid: str) -> int:
+    digest = hashlib.sha1(minecraft_uuid.encode("utf-8")).hexdigest()[:15]
+    return -int(digest, 16)
 
 
 def _normalize_row_with_aliases(row: Optional[dict[str, Any]]) -> Optional[dict[str, Any]]:
@@ -129,7 +152,8 @@ def _normalize_row_with_aliases(row: Optional[dict[str, Any]]) -> Optional[dict[
     normalized.setdefault("linked_discord_text", None)
     normalized.setdefault("verification_status", "verified")
     normalized.setdefault("registered_by_admin", False)
-    normalized.setdefault("updated_at", normalized.get("registered_at"))
+    normalized.setdefault("registered_at", normalized.get("verified_at"))
+    normalized.setdefault("updated_at", normalized.get("updated_at", normalized.get("verified_at")))
     return normalized
 
 
@@ -160,8 +184,8 @@ def save_uuid_cache(mcid: str, uuid: str):
 def get_player_by_discord(discord_user_id: str):
     with get_conn() as conn, conn.cursor(cursor_factory=RealDictCursor) as cur:
         cur.execute(
-            "SELECT discord_user_id, mcid, uuid, registered_at FROM verified_users WHERE discord_user_id = %s",
-            (str(discord_user_id),),
+            "SELECT discord_user_id, mcid, uuid, verified_at, updated_at FROM verified_users WHERE discord_user_id = %s",
+            (int(discord_user_id),),
         )
         return _normalize_row_with_aliases(_fetchone_dict(cur))
 
@@ -169,14 +193,14 @@ def get_player_by_discord(discord_user_id: str):
 def get_player_by_uuid(minecraft_uuid: str):
     with get_conn() as conn, conn.cursor(cursor_factory=RealDictCursor) as cur:
         cur.execute(
-            "SELECT discord_user_id, mcid, uuid, registered_at FROM verified_users WHERE uuid = %s",
+            "SELECT discord_user_id, mcid, uuid, verified_at, updated_at FROM verified_users WHERE uuid = %s",
             (minecraft_uuid,),
         )
         row = _fetchone_dict(cur)
         if not row:
             return None
         normalized = _normalize_row_with_aliases(row)
-        if normalized and str(normalized.get("discord_user_id", "")).startswith("admin:"):
+        if normalized and int(normalized.get("discord_user_id") or 0) < 0:
             normalized["discord_user_id"] = None
             normalized["registered_by_admin"] = True
             normalized["verification_status"] = "forced_verified"
@@ -186,7 +210,7 @@ def get_player_by_uuid(minecraft_uuid: str):
 def get_player_by_username(minecraft_username: str):
     with get_conn() as conn, conn.cursor(cursor_factory=RealDictCursor) as cur:
         cur.execute(
-            "SELECT discord_user_id, mcid, uuid, registered_at FROM verified_users WHERE lower(mcid) = lower(%s)",
+            "SELECT discord_user_id, mcid, uuid, verified_at, updated_at FROM verified_users WHERE lower(mcid) = lower(%s)",
             (minecraft_username,),
         )
         return _normalize_row_with_aliases(_fetchone_dict(cur))
@@ -200,16 +224,21 @@ def register_verified_player(
     verification_status: str = "verified",
     registered_by_admin: bool = False,
 ):
-    normalized_discord_user_id = (
-        _admin_shadow_id(minecraft_uuid) if discord_user_id is None else str(discord_user_id)
-    )
+    normalized_discord_user_id = _admin_shadow_id(minecraft_uuid) if discord_user_id is None else int(discord_user_id)
     with get_conn() as conn, conn.cursor() as cur:
         cur.execute(
             """
-            INSERT INTO verified_users (discord_user_id, mcid, uuid, registered_at)
-            VALUES (%s, %s, %s, NOW())
+            INSERT INTO verified_users (
+                discord_user_id,
+                mcid,
+                uuid,
+                hypixel_discord_tag,
+                verified_at,
+                updated_at
+            )
+            VALUES (%s, %s, %s, %s, NOW(), NOW())
             """,
-            (normalized_discord_user_id, minecraft_username, minecraft_uuid),
+            (normalized_discord_user_id, minecraft_username, minecraft_uuid, linked_discord_text),
         )
         cur.execute(
             """
@@ -234,7 +263,7 @@ def register_verified_player(
             (
                 minecraft_uuid,
                 minecraft_username,
-                normalized_discord_user_id if not normalized_discord_user_id.startswith("admin:") else None,
+                str(normalized_discord_user_id) if normalized_discord_user_id > 0 else None,
                 linked_discord_text,
                 verification_status,
                 registered_by_admin,
@@ -244,7 +273,7 @@ def register_verified_player(
 
 def delete_player_registration_by_discord(discord_user_id: str) -> bool:
     with get_conn() as conn, conn.cursor() as cur:
-        cur.execute("DELETE FROM verified_users WHERE discord_user_id = %s", (str(discord_user_id),))
+        cur.execute("DELETE FROM verified_users WHERE discord_user_id = %s", (int(discord_user_id),))
         return cur.rowcount > 0
 
 
