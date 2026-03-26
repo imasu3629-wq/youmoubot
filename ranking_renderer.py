@@ -119,9 +119,20 @@ def _get_prestige_style(star: int) -> dict[str, Any]:
     return PRESTIGE_STYLES.get(tier, PRESTIGE_STYLES[100])
 
 
+def _get_star_emblem(star: int) -> str:
+    if star >= 3100:
+        return "✥"
+    if star >= 2100:
+        return "⚝"
+    if star >= 1100:
+        return "✪"
+    return "✫"
+
+
 def get_badge_parts(star: int) -> list[tuple[str, str]]:
     style = _get_prestige_style(star)
     star_text = str(max(star, 0))
+    emblem = _get_star_emblem(max(star, 0))
 
     parts = [
         ("[", style["leftBracket"]),
@@ -134,7 +145,7 @@ def get_badge_parts(star: int) -> list[tuple[str, str]]:
 
     parts.extend(
         [
-            (style["symbol"], style["symbolColor"]),
+            (emblem, style["symbolColor"]),
             ("]", style["rightBracket"]),
         ]
     )
