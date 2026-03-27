@@ -95,7 +95,7 @@ PRESTIGE_STYLES = {
 
 
 def get_star_symbol(star: int) -> str:
-    if star >= 5000:
+    if star >= 3100:
         return "✥"
     elif star >= 2100:
         return "⚝"
