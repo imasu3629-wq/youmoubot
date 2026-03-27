@@ -13,7 +13,7 @@ HEAD_CACHE_DIR = os.path.join("cache", "skins")
 SESSION_PROFILE_URL = "https://sessionserver.mojang.com/session/minecraft/profile/{uuid}"
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 FONT_PATH = os.path.join(BASE_DIR, "Minecraftia.ttf")
-SYMBOL_FONT_PATH = os.path.join(BASE_DIR, "fonts", "Symbola.ttf")
+SYMBOL_FONT_PATH = os.path.join(BASE_DIR, "fonts", "symbola.ttf")
 SYMBOL_Y_OFFSET = -5
 
 MC_COLORS = {
