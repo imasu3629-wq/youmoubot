@@ -8,7 +8,7 @@ from typing import Any
 import requests
 from PIL import Image, ImageDraw, ImageFont
 
-from tags import get_tag_symbol
+from tags import TAG_INFO, get_tag_symbol
 
 REQUEST_TIMEOUT = 10
 HEAD_CACHE_DIR = os.path.join("cache", "skins")
@@ -210,6 +210,22 @@ def _load_symbol_font(size: int) -> ImageFont.FreeTypeFont | ImageFont.ImageFont
     return ImageFont.load_default()
 
 
+def _extract_tags(raw_tag: Any) -> list[str]:
+    if raw_tag is None:
+        return []
+    if isinstance(raw_tag, str):
+        return [raw.strip().lower() for raw in raw_tag.split(",") if raw.strip()]
+    if isinstance(raw_tag, (list, tuple, set)):
+        normalized = []
+        for raw in raw_tag:
+            value = str(raw).strip().lower()
+            if value:
+                normalized.append(value)
+        return normalized
+    value = str(raw_tag).strip().lower()
+    return [value] if value else []
+
+
 def _extract_head_from_skin_bytes(skin_bytes: bytes) -> str | None:
     try:
         skin = Image.open(io.BytesIO(skin_bytes)).convert("RGBA")
@@ -368,7 +384,13 @@ def render_ranking_image(rows: list[Any], metric: str) -> io.BytesIO:
 
 def render_stats_image(row: Any) -> io.BytesIO:
     width = 720
-    height = 280
+    tags = _extract_tags(row.get("tag"))
+    has_tags = bool(tags)
+    tag_line_height = 32
+    tag_section_padding = 18
+    base_height = 280
+    extra_height = (tag_section_padding + (len(tags) * tag_line_height)) if has_tags else 0
+    height = base_height + extra_height
     image = Image.new("RGBA", (width, height), (10, 10, 10, 255))
     draw = ImageDraw.Draw(image)
 
@@ -390,10 +412,19 @@ def render_stats_image(row: Any) -> io.BytesIO:
     player_y = 100
     draw.text((player_x, player_y), player_label, font=body_font, fill="#FFFFFF")
 
-    tag_symbol = get_tag_symbol(row.get("tag"))
-    if tag_symbol:
+    tag_symbols = []
+    for tag in tags:
+        symbol = get_tag_symbol(tag)
+        if symbol:
+            tag_symbols.append(symbol)
+    if tag_symbols:
         label_bbox = draw.textbbox((player_x, player_y), player_label, font=body_font)
-        draw.text((label_bbox[2] + 8, player_y), tag_symbol, font=symbol_font, fill="#FFFFFF")
+        draw.text(
+            (label_bbox[2] + 8, player_y),
+            " ".join(tag_symbols),
+            font=symbol_font,
+            fill="#FFFFFF",
+        )
     star = _safe_int(row["bedwars_star"])
     draw_star_text(
         draw,
@@ -405,7 +436,21 @@ def render_stats_image(row: Any) -> io.BytesIO:
         get_prestige_style(max(star, 0)),
     )
     draw.text((170, 195), f"FKDR: {_safe_float(row['fkdr']):.2f}", font=body_font, fill="#55FFFF")
-    draw.text((40, 245), f"Last Updated: {row['last_updated'] or 'N/A'}", font=small_font, fill="#AAAAAA")
+    tag_section_start_y = 245
+    if has_tags:
+        for index, tag in enumerate(tags):
+            info = TAG_INFO.get(tag)
+            if not info:
+                continue
+            line_y = tag_section_start_y + (index * tag_line_height)
+            draw.text(
+                (170, line_y),
+                f"{info['symbol']} {info['meaning']}",
+                font=body_font,
+                fill="#FFFFFF",
+            )
+
+    draw.text((40, height - 35), f"Last Updated: {row['last_updated'] or 'N/A'}", font=small_font, fill="#AAAAAA")
 
     output = io.BytesIO()
     image.save(output, format="PNG")

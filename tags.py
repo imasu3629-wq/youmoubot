@@ -6,10 +6,10 @@ TAG_SYMBOLS = {
 }
 
 TAG_INFO = {
-    "caution": {"symbol": "⚠", "meaning": "caution / warning / flagged player"},
-    "zero": {"symbol": "○", "meaning": "zero / no meaningful record / empty status"},
-    "admin": {"symbol": "♛", "meaning": "administrator"},
-    "zako": {"symbol": "☠", "meaning": "weak player / joke tag"},
+    "caution": {"symbol": "⚠", "meaning": "もしかしたらチーターかも..."},
+    "zero": {"symbol": "○", "meaning": "ゼロ鯖所属"},
+    "admin": {"symbol": "♛", "meaning": "アドミン"},
+    "zako": {"symbol": "☠", "meaning": "def以外の仕事を与えてはいけないだろう"},
 }
 
 ALLOWED_TAGS = tuple(TAG_SYMBOLS.keys())
