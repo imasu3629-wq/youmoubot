@@ -667,7 +667,7 @@ async def tagremove(interaction: discord.Interaction, mcid: str):
 
 @tree.command(name="taglookup", description="利用可能なプレイヤータグ一覧を表示します")
 async def taglookup(interaction: discord.Interaction):
-    lines = ["Tag       Symbol   Meaning"]
+    lines = ["Tag       Symbol   意味"]
     for tag_name in ALLOWED_TAGS:
         info = TAG_INFO[tag_name]
         lines.append(f"{tag_name:<9} {info['symbol']:<7} {info['meaning']}")
