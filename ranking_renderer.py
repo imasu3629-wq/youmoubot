@@ -8,6 +8,8 @@ from typing import Any
 import requests
 from PIL import Image, ImageDraw, ImageFont
 
+from tags import get_tag_symbol
+
 REQUEST_TIMEOUT = 10
 HEAD_CACHE_DIR = os.path.join("cache", "skins")
 SESSION_PROFILE_URL = "https://sessionserver.mojang.com/session/minecraft/profile/{uuid}"
@@ -332,7 +334,14 @@ def render_ranking_image(rows: list[Any], metric: str) -> io.BytesIO:
         image.paste(head, (90, y + 5), head)
 
         name = str(row["minecraft_name"] or "Unknown")
-        draw.text((140, y + 8), name, font=body_font, fill="#FFFFFF")
+        name_x = 140
+        name_y = y + 8
+        draw.text((name_x, name_y), name, font=body_font, fill="#FFFFFF")
+
+        tag_symbol = get_tag_symbol(row.get("tag"))
+        if tag_symbol:
+            name_bbox = draw.textbbox((name_x, name_y), name, font=body_font)
+            draw.text((name_bbox[2] + 8, name_y), tag_symbol, font=symbol_font, fill="#FFFFFF")
 
         star = _safe_int(row["bedwars_star"])
         draw_star_text(
@@ -376,7 +385,15 @@ def render_stats_image(row: Any) -> io.BytesIO:
     image.paste(head, (45, 95), head)
 
     name = str(row["minecraft_name"] or "Unknown")
-    draw.text((170, 100), f"Player: {name}", font=body_font, fill="#FFFFFF")
+    player_label = f"Player: {name}"
+    player_x = 170
+    player_y = 100
+    draw.text((player_x, player_y), player_label, font=body_font, fill="#FFFFFF")
+
+    tag_symbol = get_tag_symbol(row.get("tag"))
+    if tag_symbol:
+        label_bbox = draw.textbbox((player_x, player_y), player_label, font=body_font)
+        draw.text((label_bbox[2] + 8, player_y), tag_symbol, font=symbol_font, fill="#FFFFFF")
     star = _safe_int(row["bedwars_star"])
     draw_star_text(
         draw,
