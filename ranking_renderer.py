@@ -11,14 +11,10 @@ from PIL import Image, ImageDraw, ImageFont
 REQUEST_TIMEOUT = 10
 HEAD_CACHE_DIR = os.path.join("cache", "skins")
 SESSION_PROFILE_URL = "https://sessionserver.mojang.com/session/minecraft/profile/{uuid}"
-DEFAULT_FONT_PATH = os.environ.get(
-    "RANKING_FONT_PATH",
-    os.path.join(os.path.dirname(os.path.abspath(__file__)), "Minecraftia.ttf"),
-)
-SYMBOL_FONT_PATH = os.path.join(
-    os.path.dirname(os.path.abspath(__file__)), "fonts", "DejaVuSans.ttf"
-)
-SYMBOL_Y_OFFSET = -8
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+FONT_PATH = os.path.join(BASE_DIR, "Minecraftia.ttf")
+SYMBOL_FONT_PATH = os.path.join(BASE_DIR, "fonts", "Symbola.ttf")
+SYMBOL_Y_OFFSET = -5
 
 MC_COLORS = {
     "black": "#000000",
@@ -95,13 +91,14 @@ PRESTIGE_STYLES = {
 
 
 def get_star_symbol(star: int) -> str:
-    if star >= 3100:
-        return "✥"
-    elif star >= 2100:
-        return "⚝"
-    elif star >= 1100:
+    if star < 1100:
+        return "✫"
+    elif star < 2100:
         return "✪"
-    return "✫"
+    elif star < 3100:
+        return "⚝"
+    else:
+        return "✥"
 
 
 def get_prestige_key(star: int) -> int:
@@ -191,20 +188,23 @@ def _safe_float(value: Any) -> float:
 
 
 def _load_font(size: int) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
-    if os.path.exists(DEFAULT_FONT_PATH):
+    if os.path.exists(FONT_PATH):
         try:
-            return ImageFont.truetype(DEFAULT_FONT_PATH, size=size)
+            return ImageFont.truetype(FONT_PATH, size=size)
         except OSError:
             pass
     return ImageFont.load_default()
 
 
 def _load_symbol_font(size: int) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
+    print(f"[ranking_renderer] symbol font path = {SYMBOL_FONT_PATH}")
     if os.path.exists(SYMBOL_FONT_PATH):
         try:
             return ImageFont.truetype(SYMBOL_FONT_PATH, size=size)
-        except OSError:
-            pass
+        except OSError as error:
+            print(f"[ranking_renderer] failed to load symbol font: {error}")
+    else:
+        print("[ranking_renderer] symbol font file does not exist")
     return ImageFont.load_default()
 
 
