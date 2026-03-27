@@ -18,6 +18,7 @@ DEFAULT_FONT_PATH = os.environ.get(
 SYMBOL_FONT_PATH = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "fonts", "DejaVuSans.ttf"
 )
+SYMBOL_Y_OFFSET = -4
 
 MC_COLORS = {
     "black": "#000000",
@@ -94,7 +95,7 @@ PRESTIGE_STYLES = {
 
 
 def get_star_symbol(star: int) -> str:
-    if star >= 3100:
+    if star >= 5000:
         return "✥"
     elif star >= 2100:
         return "⚝"
@@ -110,7 +111,12 @@ def get_prestige_key(star: int) -> int:
 
 
 def get_prestige_style(star: int) -> dict[str, Any]:
-    return PRESTIGE_STYLES.get(get_prestige_key(star), PRESTIGE_STYLES[0])
+    prestige_key = get_prestige_key(star)
+    if prestige_key in PRESTIGE_STYLES:
+        return PRESTIGE_STYLES[prestige_key]
+
+    fallback_key = max((key for key in PRESTIGE_STYLES if key <= prestige_key), default=0)
+    return PRESTIGE_STYLES.get(fallback_key, PRESTIGE_STYLES[0])
 
 
 def draw_star_text(
@@ -142,7 +148,7 @@ def draw_star_text(
     digit_bbox = draw.textbbox((0, 0), "0", font=digit_font)
     digit_h = digit_bbox[3] - digit_bbox[1]
     sym_h = symbol_bbox[3] - symbol_bbox[1]
-    symbol_y = y + int((digit_h - sym_h) / 2)
+    symbol_y = y + int((digit_h - sym_h) / 2) + SYMBOL_Y_OFFSET
 
     draw.text((current_x, symbol_y), symbol, font=symbol_font, fill=style["symbol_color"])
     current_x = symbol_bbox[2]
