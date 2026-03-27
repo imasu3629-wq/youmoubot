@@ -385,11 +385,11 @@ def render_ranking_image(rows: list[Any], metric: str) -> io.BytesIO:
 def render_stats_image(row: Any) -> io.BytesIO:
     width = 720
     tags = _extract_tags(row.get("tag"))
-    has_tags = bool(tags)
-    tag_line_height = 32
-    tag_section_padding = 18
+    tag_meanings = [TAG_INFO[tag]["meaning"] for tag in tags if tag in TAG_INFO]
+    has_tag_meanings = bool(tag_meanings)
     base_height = 280
-    extra_height = (tag_section_padding + (len(tags) * tag_line_height)) if has_tags else 0
+    tag_line_height = 28
+    extra_height = tag_line_height if has_tag_meanings else 0
     height = base_height + extra_height
     image = Image.new("RGBA", (width, height), (10, 10, 10, 255))
     draw = ImageDraw.Draw(image)
@@ -399,6 +399,7 @@ def render_stats_image(row: Any) -> io.BytesIO:
     badge_font = _load_font(32)
     symbol_font = _load_symbol_font(32)
     small_font = _load_font(16)
+    tag_font = _load_font(20)
 
     draw.rounded_rectangle((20, 20, width - 20, height - 20), radius=12, fill=(18, 18, 18, 255))
     draw.text((40, 35), "Bedwars Stats", font=title_font, fill="#FFFFFF")
@@ -436,19 +437,14 @@ def render_stats_image(row: Any) -> io.BytesIO:
         get_prestige_style(max(star, 0)),
     )
     draw.text((170, 195), f"FKDR: {_safe_float(row['fkdr']):.2f}", font=body_font, fill="#55FFFF")
-    tag_section_start_y = 245
-    if has_tags:
-        for index, tag in enumerate(tags):
-            info = TAG_INFO.get(tag)
-            if not info:
-                continue
-            line_y = tag_section_start_y + (index * tag_line_height)
-            draw.text(
-                (170, line_y),
-                f"{info['symbol']} {info['meaning']}",
-                font=body_font,
-                fill="#FFFFFF",
-            )
+    if has_tag_meanings:
+        tag_line = " / ".join(tag_meanings)
+        draw.text(
+            (170, 235),
+            f"Tag: {tag_line}",
+            font=tag_font,
+            fill="#FFFFFF",
+        )
 
     draw.text((40, height - 35), f"Last Updated: {row['last_updated'] or 'N/A'}", font=small_font, fill="#AAAAAA")
 

@@ -1,16 +1,11 @@
-TAG_SYMBOLS = {
-    "caution": "⚠",
-    "zero": "○",
-    "admin": "♛",
-    "zako": "☠",
+TAG_INFO = {
+    "caution": {"symbol": "⚠", "meaning": "He might be a cheater"},
+    "zero": {"symbol": "○", "meaning": "Member of Server Zero"},
+    "admin": {"symbol": "♛", "meaning": "What's there to explain?"},
+    "zako": {"symbol": "☠", "meaning": "He can only do def"},
 }
 
-TAG_INFO = {
-    "caution": {"symbol": "⚠", "meaning": "もしかしたらチーターかも..."},
-    "zero": {"symbol": "○", "meaning": "ゼロ鯖所属"},
-    "admin": {"symbol": "♛", "meaning": "アドミン"},
-    "zako": {"symbol": "☠", "meaning": "def以外の仕事を与えてはいけないだろう"},
-}
+TAG_SYMBOLS = {tag: info["symbol"] for tag, info in TAG_INFO.items()}
 
 ALLOWED_TAGS = tuple(TAG_SYMBOLS.keys())
 
