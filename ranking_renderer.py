@@ -18,7 +18,7 @@ DEFAULT_FONT_PATH = os.environ.get(
 SYMBOL_FONT_PATH = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "fonts", "DejaVuSans.ttf"
 )
-SYMBOL_Y_OFFSET = -4
+SYMBOL_Y_OFFSET = -8
 
 MC_COLORS = {
     "black": "#000000",
