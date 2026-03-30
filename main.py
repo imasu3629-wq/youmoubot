@@ -21,9 +21,12 @@ from database import (
     get_player_by_uuid,
     get_player_by_username,
     get_player_stats_by_uuid,
+    get_registered_mcids_for_autocomplete,
     get_top_player_stats,
     init_db,
     register_verified_player,
+    set_player_tag_by_mcid,
+    clear_player_tag_by_mcid,
     save_uuid_cache,
     set_config_value,
     update_player_head_image,
@@ -33,10 +36,10 @@ from database import (
 from ranking_renderer import (
     RankingRenderError,
     fetch_head_base64_from_uuid,
-    render_badge_ansi,
     render_ranking_image,
     render_stats_image,
 )
+from tags import ALLOWED_TAGS, TAG_INFO, get_tag_symbol, is_valid_tag
 
 REQUEST_TIMEOUT = 10
 HYPIXEL_PLAYER_URL = "https://api.hypixel.net/v2/player"
@@ -400,6 +403,16 @@ def admin_force_register_mcid(mcid: str):
     }
 
 
+
+
+async def registered_mcid_autocomplete(
+    interaction: discord.Interaction,
+    current: str,
+) -> list[app_commands.Choice[str]]:
+    candidates = get_registered_mcids_for_autocomplete(current, limit=25)
+    return [app_commands.Choice(name=mcid, value=mcid) for mcid in candidates]
+
+
 @bot.event
 async def on_ready():
     init_db()
@@ -593,6 +606,75 @@ async def delete(interaction: discord.Interaction, mcid: str):
     await interaction.followup.send("✅ Registered MCID and related data deleted successfully.", ephemeral=True)
 
 
+
+
+@tree.command(name="tagadd", description="登録済みMCIDにタグを付与します（管理者用）")
+@app_commands.autocomplete(mcid=registered_mcid_autocomplete)
+@app_commands.choices(
+    tag=[
+        app_commands.Choice(name="caution", value="caution"),
+        app_commands.Choice(name="zero", value="zero"),
+        app_commands.Choice(name="admin", value="admin"),
+        app_commands.Choice(name="zako", value="zako"),
+    ]
+)
+async def tagadd(interaction: discord.Interaction, mcid: str, tag: app_commands.Choice[str]):
+    await interaction.response.defer(ephemeral=True)
+    if not is_admin(interaction.user.id):
+        await interaction.followup.send("❌ You do not have permission to use this command.", ephemeral=True)
+        return
+
+    normalized_tag = tag.value.strip().lower()
+    if not is_valid_tag(normalized_tag):
+        await interaction.followup.send("❌ Invalid tag value.", ephemeral=True)
+        return
+
+    if not get_player_by_username(mcid):
+        await interaction.followup.send("❌ This MCID is not registered.", ephemeral=True)
+        return
+
+    updated = set_player_tag_by_mcid(mcid, normalized_tag)
+    if not updated:
+        await interaction.followup.send("❌ This MCID is not registered.", ephemeral=True)
+        return
+
+    symbol = get_tag_symbol(normalized_tag)
+    await interaction.followup.send(
+        f"Tag '{normalized_tag}' ({symbol}) has been assigned to {mcid}.",
+        ephemeral=True,
+    )
+
+
+@tree.command(name="tagremove", description="登録済みMCIDのタグを削除します（管理者用）")
+@app_commands.autocomplete(mcid=registered_mcid_autocomplete)
+async def tagremove(interaction: discord.Interaction, mcid: str):
+    await interaction.response.defer(ephemeral=True)
+    if not is_admin(interaction.user.id):
+        await interaction.followup.send("❌ You do not have permission to use this command.", ephemeral=True)
+        return
+
+    if not get_player_by_username(mcid):
+        await interaction.followup.send("❌ This MCID is not registered.", ephemeral=True)
+        return
+
+    updated = clear_player_tag_by_mcid(mcid)
+    if not updated:
+        await interaction.followup.send("❌ This MCID is not registered.", ephemeral=True)
+        return
+
+    await interaction.followup.send(f"Tag has been removed from {mcid}.", ephemeral=True)
+
+
+@tree.command(name="taglookup", description="利用可能なプレイヤータグ一覧を表示します")
+async def taglookup(interaction: discord.Interaction):
+    lines = ["Tag       Symbol   Meaning"]
+    for tag_name in ALLOWED_TAGS:
+        info = TAG_INFO[tag_name]
+        lines.append(f"{tag_name:<9} {info['symbol']:<7} {info['meaning']}")
+
+    await interaction.response.send_message("```\n" + "\n".join(lines) + "\n```")
+
+
 @tree.command(name="updateapi", description="Hypixel API キーを更新します（管理者用）")
 async def updateapi(interaction: discord.Interaction, api_key: str):
     await interaction.response.defer(ephemeral=True)
@@ -692,10 +774,7 @@ async def stats(interaction: discord.Interaction, mcid: str):
         image_bytes = render_stats_image(row)
         filename = f"bedwars_stats_{_sanitize_filename(str(row['minecraft_name']))}.png"
         file = discord.File(image_bytes, filename=filename)
-        badge = render_badge_ansi(_safe_int(row["bedwars_star"]))
-        fkdr_value = float(row["fkdr"] or 0)
-        message = f"```ansi\n{badge}\n```\nFKDR: {fkdr_value:.2f}"
-        await interaction.followup.send(content=message, file=file)
+        await interaction.followup.send(file=file)
     except VerificationError as error:
         await interaction.followup.send(error.message)
     except requests.RequestException:
