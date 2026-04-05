@@ -175,6 +175,18 @@ def init_db():
             """
         )
         cur.execute("CREATE INDEX IF NOT EXISTS idx_player_stats_name ON player_stats (minecraft_name)")
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS ranking_message_state (
+                guild_id BIGINT NOT NULL,
+                channel_id BIGINT NOT NULL,
+                ranking_type TEXT NOT NULL,
+                message_ids JSONB NOT NULL DEFAULT '[]'::jsonb,
+                last_updated_at TIMESTAMP DEFAULT NOW(),
+                PRIMARY KEY (guild_id, channel_id, ranking_type)
+            )
+            """
+        )
 
 
 def _admin_shadow_id(minecraft_uuid: str) -> int:
@@ -576,10 +588,16 @@ def get_top_player_stats(metric: str, limit: int = 10):
         "final_kills": "final_kills",
         "beds_broken": "beds_broken",
         "winstreak": "winstreak",
+        "bblr": "bblr",
     }
     order_column = metric_column_map.get(metric)
     if not order_column:
         raise ValueError("Invalid ranking metric")
+
+    if metric == "bblr":
+        order_expression = "COALESCE(ps.beds_broken::double precision / NULLIF(ps.beds_lost, 0), ps.beds_broken::double precision, 0)"
+    else:
+        order_expression = f"COALESCE(ps.{order_column}, 0)"
 
     with get_conn() as conn, conn.cursor(cursor_factory=RealDictCursor) as cur:
         cur.execute(
@@ -607,12 +625,52 @@ def get_top_player_stats(metric: str, limit: int = 10):
             FROM player_stats ps
             INNER JOIN verified_users vu
                 ON vu.uuid = ps.minecraft_uuid
-            ORDER BY COALESCE(ps.{order_column}, 0) DESC, ps.minecraft_name ASC
+            ORDER BY {order_expression} DESC, ps.minecraft_name ASC
             LIMIT %s
             """,
             (limit,),
         )
         return _fetchall_dict(cur)
+
+
+def get_ranking_message_state(guild_id: int, channel_id: int, ranking_type: str) -> Optional[dict[str, Any]]:
+    with get_conn() as conn, conn.cursor(cursor_factory=RealDictCursor) as cur:
+        cur.execute(
+            """
+            SELECT guild_id, channel_id, ranking_type, message_ids, last_updated_at
+            FROM ranking_message_state
+            WHERE guild_id = %s AND channel_id = %s AND ranking_type = %s
+            """,
+            (int(guild_id), int(channel_id), ranking_type),
+        )
+        row = _fetchone_dict(cur)
+        if not row:
+            return None
+        message_ids = row.get("message_ids") or []
+        row["message_ids"] = [int(mid) for mid in message_ids if str(mid).isdigit()]
+        return row
+
+
+def upsert_ranking_message_state(
+    guild_id: int,
+    channel_id: int,
+    ranking_type: str,
+    message_ids: list[int],
+):
+    normalized_ids = [int(mid) for mid in message_ids]
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO ranking_message_state (
+                guild_id, channel_id, ranking_type, message_ids, last_updated_at
+            )
+            VALUES (%s, %s, %s, %s, NOW())
+            ON CONFLICT (guild_id, channel_id, ranking_type) DO UPDATE SET
+                message_ids = EXCLUDED.message_ids,
+                last_updated_at = NOW()
+            """,
+            (int(guild_id), int(channel_id), ranking_type, Json(normalized_ids)),
+        )
 
 
 def update_player_head_image(minecraft_uuid: str, head_image_base64: str):

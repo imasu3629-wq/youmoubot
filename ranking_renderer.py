@@ -163,6 +163,7 @@ RANKING_META = {
     "fkdr": {"title": "Bedwars FKDR Ranking", "label": "FKDR", "decimals": 2},
     "wins": {"title": "Bedwars Wins Ranking", "label": "Wins", "decimals": 0},
     "star": {"title": "Bedwars Star Ranking", "label": "Star", "decimals": 0},
+    "bblr": {"title": "Bedwars BBLR Ranking", "label": "BBLR", "decimals": 2},
     "wlr": {"title": "Bedwars WLR Ranking", "label": "WLR", "decimals": 2},
     "kdr": {"title": "Bedwars KDR Ranking", "label": "KDR", "decimals": 2},
     "final_kills": {"title": "Bedwars Final Kills Ranking", "label": "Final Kills", "decimals": 0},
@@ -289,6 +290,10 @@ def _load_head_image(head_image_base64: str | None) -> Image.Image:
 def _extract_metric_value(row: Any, metric: str) -> float:
     if metric == "star":
         return float(_safe_int(row["bedwars_star"]))
+    if metric == "bblr":
+        beds_broken = _safe_int(row.get("beds_broken"))
+        beds_lost = _safe_int(row.get("beds_lost"))
+        return float(beds_broken) / max(beds_lost, 1)
     if metric in ("fkdr", "wlr", "kdr"):
         return _safe_float(row[metric])
     return float(_safe_int(row[metric]))
@@ -317,12 +322,13 @@ def _latest_timestamp(rows: list[Any]) -> str:
     return latest.strftime("Updated: %Y-%m-%d %H:%M")
 
 
-def render_ranking_image(rows: list[Any], metric: str) -> io.BytesIO:
+def render_ranking_image(rows: list[Any], metric: str, *, show_title: bool = True, rank_start: int = 1) -> io.BytesIO:
     if metric not in RANKING_META:
         raise RankingRenderError("Unsupported ranking metric")
 
     width = 1000
-    height = 120 + (len(rows) * 64) + 70
+    top_padding = 120 if show_title else 70
+    height = top_padding + (len(rows) * 64) + 70
     image = Image.new("RGBA", (width, height), (10, 10, 10, 255))
     draw = ImageDraw.Draw(image)
 
@@ -334,17 +340,21 @@ def render_ranking_image(rows: list[Any], metric: str) -> io.BytesIO:
     footer_font = _load_font(14)
 
     meta = RANKING_META[metric]
-    draw.text((40, 25), meta["title"], font=title_font, fill="#FFFFFF")
-    draw.text((40, 75), "Rank", font=header_font, fill="#AAAAAA")
-    draw.text((140, 75), "Player", font=header_font, fill="#AAAAAA")
-    draw.text((560, 75), meta["label"], font=header_font, fill="#AAAAAA")
+    if show_title:
+        draw.text((40, 25), meta["title"], font=title_font, fill="#FFFFFF")
+        header_y = 75
+    else:
+        header_y = 25
+    draw.text((40, header_y), "Rank", font=header_font, fill="#AAAAAA")
+    draw.text((140, header_y), "Player", font=header_font, fill="#AAAAAA")
+    draw.text((560, header_y), meta["label"], font=header_font, fill="#AAAAAA")
 
-    row_start_y = 105
+    row_start_y = header_y + 30
     for idx, row in enumerate(rows, start=1):
         y = row_start_y + (idx - 1) * 64
 
         draw.rounded_rectangle((30, y - 4, 970, y + 50), radius=8, fill=(18, 18, 18, 255))
-        draw.text((40, y + 8), f"#{idx}", font=body_font, fill="#FFFFFF")
+        draw.text((40, y + 8), f"#{rank_start + idx - 1}", font=body_font, fill="#FFFFFF")
 
         head = _load_head_image(row["head_image_base64"]).resize((32, 32))
         image.paste(head, (90, y + 5), head)
