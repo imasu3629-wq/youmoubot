@@ -7,7 +7,7 @@ from tags import is_valid_tag
 
 import psycopg2
 from psycopg2 import IntegrityError
-from psycopg2.extras import RealDictCursor
+from psycopg2.extras import Json, RealDictCursor
 
 DATABASE_URL = os.environ.get("DATABASE_URL")
 if not DATABASE_URL:
@@ -155,6 +155,25 @@ def init_db():
             """
         )
         cur.execute("ALTER TABLE player_stats ADD COLUMN IF NOT EXISTS raw_flashlight_json JSONB")
+        cur.execute(
+            """
+            DO $$
+            BEGIN
+                IF EXISTS (
+                    SELECT 1
+                    FROM information_schema.columns
+                    WHERE table_name = 'player_stats'
+                      AND column_name = 'raw_flashlight_json'
+                      AND data_type = 'json'
+                ) THEN
+                    ALTER TABLE player_stats
+                    ALTER COLUMN raw_flashlight_json
+                    TYPE JSONB
+                    USING raw_flashlight_json::jsonb;
+                END IF;
+            END$$;
+            """
+        )
         cur.execute("CREATE INDEX IF NOT EXISTS idx_player_stats_name ON player_stats (minecraft_name)")
 
 
@@ -517,7 +536,7 @@ def upsert_player_stats(
                 wlr,
                 kdr,
                 head_image_base64,
-                raw_flashlight_json,
+                Json(raw_flashlight_json) if raw_flashlight_json is not None else None,
             ),
         )
 
