@@ -194,6 +194,26 @@ def _safe_ratio(numerator: int, denominator: int) -> float:
     return round(numerator / max(denominator, 1), 2)
 
 
+def _calculate_bedwars_star_from_experience(total_experience: int) -> int:
+    exp = max(_safe_int(total_experience), 0)
+    exp_per_prestige = 482_000
+    prestiges = exp // exp_per_prestige
+    remaining_exp = exp % exp_per_prestige
+
+    if remaining_exp < 500:
+        level_within_prestige = 0
+    elif remaining_exp < 1_500:
+        level_within_prestige = 1
+    elif remaining_exp < 3_500:
+        level_within_prestige = 2
+    elif remaining_exp < 7_000:
+        level_within_prestige = 3
+    else:
+        level_within_prestige = 4 + ((remaining_exp - 7_000) // 5_000)
+
+    return int(prestiges * 100 + min(level_within_prestige, 99))
+
+
 def _normalize_uuid(uuid: str) -> str:
     compact = str(uuid or "").replace("-", "").strip().lower()
     if len(compact) != 32 or any(ch not in "0123456789abcdef" for ch in compact):
@@ -316,21 +336,34 @@ def normalize_flashlight_playerdata(requested_uuid: str, payload: dict) -> dict:
         or requested_uuid
     )
 
-    bedwars_star = _safe_int(
+    bedwars_experience = _safe_int(
         _first_non_none(
-            payload,
+            bedwars_blob,
             [
-                ("bedwars_star",),
-                ("bedwars", "star"),
-                ("stats", "bedwars", "star"),
-                ("stats", "bedwars", "level"),
-                ("stats", "Bedwars", "star"),
-                ("stats", "Bedwars", "level"),
-                ("player", "achievements", "bedwars_level"),
-                ("achievements", "bedwars_level"),
+                ("Experience",),
+                ("experience",),
+                ("exp",),
+                ("Exp",),
             ],
         )
     )
+    bedwars_star = _calculate_bedwars_star_from_experience(bedwars_experience)
+    if bedwars_star == 0:
+        bedwars_star = _safe_int(
+            _first_non_none(
+                payload,
+                [
+                    ("bedwars_star",),
+                    ("bedwars", "star"),
+                    ("stats", "bedwars", "star"),
+                    ("stats", "bedwars", "level"),
+                    ("stats", "Bedwars", "star"),
+                    ("stats", "Bedwars", "level"),
+                    ("player", "achievements", "bedwars_level"),
+                    ("achievements", "bedwars_level"),
+                ],
+            )
+        )
     if bedwars_star == 0:
         bedwars_star = _safe_int(
             _first_non_none(
