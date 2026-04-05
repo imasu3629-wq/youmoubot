@@ -43,6 +43,7 @@ from tags import ALLOWED_TAGS, TAG_INFO, get_tag_symbol, is_valid_tag
 
 REQUEST_TIMEOUT = 10
 HYPIXEL_PLAYER_URL = "https://api.hypixel.net/v2/player"
+FLASHLIGHT_PLAYERDATA_URL = "https://flashlight.prismoverlay.com/v1/playerdata"
 MOJANG_PROFILE_URL = "https://api.mojang.com/users/profiles/minecraft/{mcid}"
 SESSION_PROFILE_URL = "https://sessionserver.mojang.com/session/minecraft/profile/{uuid}"
 AUTHORIZED_USERS = [1278574483195559977]
@@ -77,6 +78,12 @@ tree = app_commands.CommandTree(bot)
 
 
 class VerificationError(Exception):
+    def __init__(self, message: str):
+        super().__init__(message)
+        self.message = message
+
+
+class PlayerDataFetchError(Exception):
     def __init__(self, message: str):
         super().__init__(message)
         self.message = message
@@ -187,6 +194,30 @@ def _safe_ratio(numerator: int, denominator: int) -> float:
     return round(numerator / max(denominator, 1), 2)
 
 
+def _normalize_uuid(uuid: str) -> str:
+    compact = str(uuid or "").replace("-", "").strip().lower()
+    if len(compact) != 32 or any(ch not in "0123456789abcdef" for ch in compact):
+        raise PlayerDataFetchError("❌ Invalid UUID format.")
+    return compact
+
+
+def _get_nested_value(payload: dict, path: tuple[str, ...]):
+    current = payload
+    for key in path:
+        if not isinstance(current, dict):
+            return None
+        current = current.get(key)
+    return current
+
+
+def _first_non_none(payload: dict, paths: list[tuple[str, ...]]):
+    for path in paths:
+        value = _get_nested_value(payload, path)
+        if value is not None:
+            return value
+    return None
+
+
 def _sanitize_filename(value: str) -> str:
     cleaned = re.sub(r"[^a-zA-Z0-9_-]+", "_", value.strip().lower())
     return cleaned or "ranking"
@@ -197,6 +228,139 @@ def _ensure_head_image_base64(uuid: str) -> Optional[str]:
     if head_image_base64:
         update_player_head_image(uuid, head_image_base64)
     return head_image_base64
+
+
+def fetch_playerdata_from_flashlight(uuid: str) -> dict:
+    normalized_uuid = _normalize_uuid(uuid)
+    try:
+        response = requests.get(
+            FLASHLIGHT_PLAYERDATA_URL,
+            params={"uuid": normalized_uuid},
+            timeout=REQUEST_TIMEOUT,
+        )
+    except requests.Timeout:
+        raise PlayerDataFetchError("⚠️ Flashlight API request timed out.")
+    except requests.RequestException as error:
+        raise PlayerDataFetchError(f"⚠️ Flashlight API request failed: {error}")
+
+    if response.status_code == 404:
+        raise PlayerDataFetchError("❌ Flashlight にプレイヤーデータが見つかりませんでした。")
+    if response.status_code != 200:
+        raise PlayerDataFetchError(
+            f"❌ Flashlight API returned non-200 response: {response.status_code}"
+        )
+
+    try:
+        payload = response.json()
+    except ValueError:
+        raise PlayerDataFetchError("❌ Flashlight API returned invalid JSON.")
+
+    if not isinstance(payload, dict):
+        raise PlayerDataFetchError("❌ Flashlight API payload is malformed.")
+
+    return payload
+
+
+def normalize_flashlight_playerdata(requested_uuid: str, payload: dict) -> dict:
+    bedwars_blob = _first_non_none(
+        payload,
+        [
+            ("bedwars",),
+            ("stats", "bedwars"),
+            ("stats", "Bedwars"),
+            ("player", "stats", "bedwars"),
+            ("player", "stats", "Bedwars"),
+            ("data", "bedwars"),
+            ("data", "stats", "bedwars"),
+            ("playerData", "bedwars"),
+            ("playerData", "stats", "bedwars"),
+        ],
+    )
+    if not isinstance(bedwars_blob, dict):
+        raise PlayerDataFetchError("❌ Flashlight payload is missing Bedwars stats.")
+
+    achievements_blob = _first_non_none(
+        payload,
+        [
+            ("achievements",),
+            ("player", "achievements"),
+            ("data", "achievements"),
+            ("playerData", "achievements"),
+        ],
+    )
+    if not isinstance(achievements_blob, dict):
+        achievements_blob = {}
+
+    resolved_uuid = str(
+        _first_non_none(
+            payload,
+            [("uuid",), ("player", "uuid"), ("data", "uuid"), ("playerData", "uuid")],
+        )
+        or requested_uuid
+    )
+    resolved_name = str(
+        _first_non_none(
+            payload,
+            [
+                ("minecraft_name",),
+                ("username",),
+                ("name",),
+                ("displayname",),
+                ("player", "displayname"),
+                ("player", "name"),
+                ("data", "name"),
+                ("playerData", "name"),
+            ],
+        )
+        or fetch_current_name(requested_uuid)
+        or requested_uuid
+    )
+
+    bedwars_star = _safe_int(
+        _first_non_none(
+            payload,
+            [
+                ("bedwars_star",),
+                ("bedwars", "star"),
+                ("stats", "bedwars", "star"),
+                ("stats", "bedwars", "level"),
+                ("stats", "Bedwars", "star"),
+                ("stats", "Bedwars", "level"),
+                ("player", "achievements", "bedwars_level"),
+                ("achievements", "bedwars_level"),
+            ],
+        )
+    )
+    if bedwars_star == 0:
+        bedwars_star = _safe_int(
+            _first_non_none(
+                achievements_blob,
+                [("bedwars_level",), ("bedwars_star",), ("bedwarsLevel",)],
+            )
+        )
+
+    normalized = {
+        "minecraft_uuid": _normalize_uuid(resolved_uuid),
+        "minecraft_name": resolved_name,
+        "bedwars_star": bedwars_star,
+        "wins": _safe_int(_first_non_none(bedwars_blob, [("wins",), ("wins_bedwars",)])),
+        "losses": _safe_int(_first_non_none(bedwars_blob, [("losses",), ("losses_bedwars",)])),
+        "final_kills": _safe_int(_first_non_none(bedwars_blob, [("final_kills",), ("final_kills_bedwars",)])),
+        "final_deaths": _safe_int(_first_non_none(bedwars_blob, [("final_deaths",), ("final_deaths_bedwars",)])),
+        "beds_broken": _safe_int(_first_non_none(bedwars_blob, [("beds_broken",), ("beds_broken_bedwars",)])),
+        "beds_lost": _safe_int(_first_non_none(bedwars_blob, [("beds_lost",), ("beds_lost_bedwars",)])),
+        "kills": _safe_int(_first_non_none(bedwars_blob, [("kills",), ("kills_bedwars",)])),
+        "deaths": _safe_int(_first_non_none(bedwars_blob, [("deaths",), ("deaths_bedwars",)])),
+        "games_played": _safe_int(
+            _first_non_none(bedwars_blob, [("games_played",), ("games_played_bedwars",)])
+        ),
+        "winstreak": _safe_int(_first_non_none(bedwars_blob, [("winstreak",), ("win_streak",)])),
+    }
+    normalized["fkdr"] = _safe_ratio(normalized["final_kills"], normalized["final_deaths"])
+    normalized["wlr"] = _safe_ratio(normalized["wins"], normalized["losses"])
+    normalized["kdr"] = _safe_ratio(normalized["kills"], normalized["deaths"])
+    normalized["raw_flashlight_json"] = payload
+    return normalized
 
 
 def refresh_player_identity(mcid_or_uuid: str) -> Optional[str]:
@@ -236,64 +400,28 @@ def refresh_player_identity(mcid_or_uuid: str) -> Optional[str]:
 
 
 def fetch_and_store_player_stats(uuid: str):
-    api_key = get_hypixel_api_key()
-    if not api_key:
-        raise VerificationError("❌ Hypixel API key is not configured. Use /updateapi first.")
-
-    response = requests.get(
-        HYPIXEL_PLAYER_URL,
-        params={"key": api_key, "uuid": uuid},
-        timeout=REQUEST_TIMEOUT,
-    )
-    if response.status_code == 429:
-        raise VerificationError("⚠️ Hypixel API のレート制限に達しました。少し待ってから再試行してください。")
-    if response.status_code != 200:
-        raise VerificationError("❌ Hypixel API からプレイヤー情報を取得できませんでした。")
-
-    payload = response.json()
-    if not payload.get("success", False):
-        raise VerificationError("❌ Hypixel API がエラーを返しました。")
-
-    player = payload.get("player")
-    if not player:
-        raise VerificationError("❌ Hypixel にプレイヤーデータが見つかりませんでした。")
-
-    achievements = player.get("achievements") or {}
-    bedwars_stats = ((player.get("stats") or {}).get("Bedwars")) or {}
-
-    minecraft_uuid = str(player.get("uuid") or uuid)
-    minecraft_name = str(player.get("displayname") or fetch_current_name(uuid) or uuid)
-    bedwars_star = _safe_int(achievements.get("bedwars_level"))
-    wins = _safe_int(bedwars_stats.get("wins_bedwars"))
-    losses = _safe_int(bedwars_stats.get("losses_bedwars"))
-    final_kills = _safe_int(bedwars_stats.get("final_kills_bedwars"))
-    final_deaths = _safe_int(bedwars_stats.get("final_deaths_bedwars"))
-    beds_broken = _safe_int(bedwars_stats.get("beds_broken_bedwars"))
-    beds_lost = _safe_int(bedwars_stats.get("beds_lost_bedwars"))
-    kills = _safe_int(bedwars_stats.get("kills_bedwars"))
-    deaths = _safe_int(bedwars_stats.get("deaths_bedwars"))
-    games_played = _safe_int(bedwars_stats.get("games_played_bedwars"))
-    winstreak = _safe_int(bedwars_stats.get("winstreak"))
-    head_image_base64 = fetch_head_base64_from_uuid(minecraft_uuid)
-
+    payload = fetch_playerdata_from_flashlight(uuid)
+    normalized = normalize_flashlight_playerdata(uuid, payload)
+    head_image_base64 = fetch_head_base64_from_uuid(normalized["minecraft_uuid"])
     upsert_player_stats(
-        minecraft_uuid=minecraft_uuid,
-        minecraft_name=minecraft_name,
-        bedwars_star=bedwars_star,
-        wins=wins,
-        losses=losses,
-        final_kills=final_kills,
-        final_deaths=final_deaths,
-        beds_broken=beds_broken,
-        beds_lost=beds_lost,
-        kills=kills,
-        deaths=deaths,
-        games_played=games_played,
-        winstreak=winstreak,
-        fkdr=_safe_ratio(final_kills, final_deaths),
-        wlr=_safe_ratio(wins, losses),
-        kdr=_safe_ratio(kills, deaths),
+        minecraft_uuid=normalized["minecraft_uuid"],
+        minecraft_name=normalized["minecraft_name"],
+        bedwars_star=normalized["bedwars_star"],
+        wins=normalized["wins"],
+        losses=normalized["losses"],
+        final_kills=normalized["final_kills"],
+        final_deaths=normalized["final_deaths"],
+        beds_broken=normalized["beds_broken"],
+        beds_lost=normalized["beds_lost"],
+        kills=normalized["kills"],
+        deaths=normalized["deaths"],
+        games_played=normalized["games_played"],
+        winstreak=normalized["winstreak"],
+        fkdr=normalized["fkdr"],
+        wlr=normalized["wlr"],
+        kdr=normalized["kdr"],
         head_image_base64=head_image_base64,
+        raw_flashlight_json=normalized["raw_flashlight_json"],
     )
 
 
@@ -304,7 +432,7 @@ def resolve_target_uuid(mcid_or_uuid: str) -> Optional[str]:
 
     compact = value.replace("-", "").lower()
     if len(compact) == 32 and all(ch in "0123456789abcdef" for ch in compact):
-        return compact
+        return _normalize_uuid(compact)
 
     profile = fetch_player_profile(value)
     if not profile:
@@ -693,7 +821,7 @@ async def updateapi(interaction: discord.Interaction, api_key: str):
     await interaction.followup.send("Hypixel API key updated successfully.", ephemeral=True)
 
 
-@tree.command(name="update", description="Hypixel Bedwars stats を更新します（管理者用）")
+@tree.command(name="update", description="Bedwars stats を更新します（管理者用）")
 async def update(interaction: discord.Interaction, mcid_or_all: str):
     await interaction.response.defer(ephemeral=True)
     if not is_admin(interaction.user.id):
@@ -735,18 +863,18 @@ async def update(interaction: discord.Interaction, mcid_or_all: str):
 
         fetch_and_store_player_stats(uuid)
         await interaction.followup.send("✅ Player stats updated successfully.", ephemeral=True)
-    except VerificationError as error:
+    except (VerificationError, PlayerDataFetchError) as error:
         await interaction.followup.send(error.message, ephemeral=True)
     except requests.RequestException:
         await interaction.followup.send(
-            "⚠️ Network error while contacting Mojang/Hypixel services. Please try again.",
+            "⚠️ Network error while contacting Mojang/Flashlight services. Please try again.",
             ephemeral=True,
         )
     except Exception as error:
         await interaction.followup.send(f"⚠️ エラーが発生しました: {error}", ephemeral=True)
 
 
-@tree.command(name="stats", description="指定MCIDのBedwars StarとFKDRを表示します")
+@tree.command(name="stats", description="指定MCIDのBedwars統計を表示します")
 async def stats(interaction: discord.Interaction, mcid: str):
     await interaction.response.defer()
 
@@ -775,11 +903,11 @@ async def stats(interaction: discord.Interaction, mcid: str):
         filename = f"bedwars_stats_{_sanitize_filename(str(row['minecraft_name']))}.png"
         file = discord.File(image_bytes, filename=filename)
         await interaction.followup.send(file=file)
-    except VerificationError as error:
+    except (VerificationError, PlayerDataFetchError) as error:
         await interaction.followup.send(error.message)
     except requests.RequestException:
         await interaction.followup.send(
-            "⚠️ Network error while contacting Mojang/Hypixel services. Please try again.",
+            "⚠️ Network error while contacting Mojang/Flashlight services. Please try again.",
         )
     except Exception as error:
         await interaction.followup.send(f"⚠️ エラーが発生しました: {error}")
@@ -822,6 +950,8 @@ async def ranking(interaction: discord.Interaction, ranking_type: app_commands.C
         await interaction.followup.send(file=file)
     except RankingRenderError:
         await interaction.followup.send("⚠️ ランキング画像の生成に失敗しました。")
+    except PlayerDataFetchError as error:
+        await interaction.followup.send(error.message)
     except Exception as error:
         await interaction.followup.send(f"⚠️ エラーが発生しました: {error}")
 
