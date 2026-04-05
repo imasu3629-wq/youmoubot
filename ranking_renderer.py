@@ -8,7 +8,7 @@ from typing import Any
 import requests
 from PIL import Image, ImageDraw, ImageFont
 
-from tags import TAG_INFO, get_tag_symbol
+from urchin_tags import format_urchin_added_on_date, get_urchin_icon_path
 
 REQUEST_TIMEOUT = 10
 HEAD_CACHE_DIR = os.path.join("cache", "skins")
@@ -211,22 +211,6 @@ def _load_symbol_font(size: int) -> ImageFont.FreeTypeFont | ImageFont.ImageFont
     return ImageFont.load_default()
 
 
-def _extract_tags(raw_tag: Any) -> list[str]:
-    if raw_tag is None:
-        return []
-    if isinstance(raw_tag, str):
-        return [raw.strip().lower() for raw in raw_tag.split(",") if raw.strip()]
-    if isinstance(raw_tag, (list, tuple, set)):
-        normalized = []
-        for raw in raw_tag:
-            value = str(raw).strip().lower()
-            if value:
-                normalized.append(value)
-        return normalized
-    value = str(raw_tag).strip().lower()
-    return [value] if value else []
-
-
 def _extract_head_from_skin_bytes(skin_bytes: bytes) -> str | None:
     try:
         skin = Image.open(io.BytesIO(skin_bytes)).convert("RGBA")
@@ -240,8 +224,10 @@ def _extract_head_from_skin_bytes(skin_bytes: bytes) -> str | None:
     hat_layer = skin.crop((40, 8, 48, 16)).convert("RGBA")
     base_layer.alpha_composite(hat_layer)
 
+    upscaled = base_layer.resize((64, 64), Image.Resampling.NEAREST)
+
     output = io.BytesIO()
-    base_layer.save(output, format="PNG")
+    upscaled.save(output, format="PNG")
     return base64.b64encode(output.getvalue()).decode("utf-8")
 
 
@@ -278,13 +264,35 @@ def _load_head_image(head_image_base64: str | None) -> Image.Image:
     if head_image_base64:
         try:
             raw = base64.b64decode(head_image_base64)
-            return Image.open(io.BytesIO(raw)).convert("RGBA")
+            head = Image.open(io.BytesIO(raw)).convert("RGBA")
+            if head.width <= 16 and head.height <= 16:
+                return head.resize((64, 64), Image.Resampling.NEAREST)
+            return head
         except (ValueError, OSError, base64.binascii.Error):
             pass
     fallback = Image.new("RGBA", (64, 64), (60, 60, 60, 255))
     fallback_draw = ImageDraw.Draw(fallback)
     fallback_draw.rectangle((12, 12, 52, 52), fill=(110, 110, 110, 255))
     return fallback
+
+
+def _load_tag_icon(tag_name: str | None, target_height: int) -> Image.Image | None:
+    if not tag_name:
+        return None
+    icon_path = get_urchin_icon_path(tag_name)
+    if not icon_path:
+        return None
+    if not os.path.exists(icon_path):
+        return None
+    try:
+        icon = Image.open(icon_path).convert("RGBA")
+    except OSError:
+        return None
+
+    safe_height = max(target_height, 1)
+    scale = safe_height / max(icon.height, 1)
+    resized_width = max(int(icon.width * scale), 1)
+    return icon.resize((resized_width, safe_height), Image.Resampling.LANCZOS)
 
 
 def _extract_metric_value(row: Any, metric: str) -> float:
@@ -356,7 +364,7 @@ def render_ranking_image(rows: list[Any], metric: str, *, show_title: bool = Tru
         draw.rounded_rectangle((30, y - 4, 970, y + 50), radius=8, fill=(18, 18, 18, 255))
         draw.text((40, y + 8), f"#{rank_start + idx - 1}", font=body_font, fill="#FFFFFF")
 
-        head = _load_head_image(row["head_image_base64"]).resize((32, 32))
+        head = _load_head_image(row["head_image_base64"]).resize((32, 32), Image.Resampling.NEAREST)
         image.paste(head, (90, y + 5), head)
 
         name = str(row["minecraft_name"] or "Unknown")
@@ -364,10 +372,13 @@ def render_ranking_image(rows: list[Any], metric: str, *, show_title: bool = Tru
         name_y = y + 8
         draw.text((name_x, name_y), name, font=body_font, fill="#FFFFFF")
 
-        tag_symbol = get_tag_symbol(row.get("tag"))
-        if tag_symbol:
+        selected_tag = row.get("urchin_tag")
+        icon = _load_tag_icon((selected_tag or {}).get("tag") if isinstance(selected_tag, dict) else None, 20)
+        if icon:
             name_bbox = draw.textbbox((name_x, name_y), name, font=body_font)
-            draw.text((name_bbox[2] + 8, name_y), tag_symbol, font=symbol_font, fill="#FFFFFF")
+            name_height = name_bbox[3] - name_bbox[1]
+            icon_y = name_y + max(int((name_height - icon.height) / 2), 0)
+            image.paste(icon, (name_bbox[2] + 6, icon_y), icon)
 
         star = _safe_int(row["bedwars_star"])
         draw_star_text(
@@ -394,12 +405,10 @@ def render_ranking_image(rows: list[Any], metric: str, *, show_title: bool = Tru
 
 def render_stats_image(row: Any) -> io.BytesIO:
     width = 720
-    tags = _extract_tags(row.get("tag"))
-    tag_meanings = [TAG_INFO[tag]["meaning"] for tag in tags if tag in TAG_INFO]
-    has_tag_meanings = bool(tag_meanings)
     base_height = 320
-    tag_line_height = 28
-    extra_height = tag_line_height if has_tag_meanings else 0
+    selected_tag = row.get("urchin_tag")
+    has_tag = isinstance(selected_tag, dict) and bool(selected_tag.get("tag"))
+    extra_height = 90 if has_tag else 0
     height = base_height + extra_height
     image = Image.new("RGBA", (width, height), (10, 10, 10, 255))
     draw = ImageDraw.Draw(image)
@@ -423,19 +432,6 @@ def render_stats_image(row: Any) -> io.BytesIO:
     player_y = 100
     draw.text((player_x, player_y), player_label, font=body_font, fill="#FFFFFF")
 
-    tag_symbols = []
-    for tag in tags:
-        symbol = get_tag_symbol(tag)
-        if symbol:
-            tag_symbols.append(symbol)
-    if tag_symbols:
-        label_bbox = draw.textbbox((player_x, player_y), player_label, font=body_font)
-        draw.text(
-            (label_bbox[2] + 8, player_y),
-            " ".join(tag_symbols),
-            font=symbol_font,
-            fill="#FFFFFF",
-        )
     star = _safe_int(row["bedwars_star"])
     draw_star_text(
         draw,
@@ -449,14 +445,14 @@ def render_stats_image(row: Any) -> io.BytesIO:
     draw.text((170, 195), f"FKDR: {_safe_float(row['fkdr']):.2f}", font=body_font, fill="#55FFFF")
     draw.text((350, 195), f"WLR: {_safe_float(row.get('wlr')):.2f}", font=body_font, fill="#55FFFF")
     draw.text((500, 195), f"KDR: {_safe_float(row.get('kdr')):.2f}", font=body_font, fill="#55FFFF")
-    if has_tag_meanings:
-        tag_line = " / ".join(tag_meanings)
-        draw.text(
-            (170, 255),
-            f"Tag: {tag_line}",
-            font=tag_font,
-            fill="#FFFFFF",
-        )
+    if has_tag:
+        reason = str(selected_tag.get("reason") or "").strip() or "Unknown"
+        added_on = format_urchin_added_on_date(str(selected_tag.get("added_on") or ""))
+        draw.text((170, 245), f"Tag: {selected_tag.get('tag')}", font=tag_font, fill="#FFFFFF")
+        draw.text((170, 273), f"Reason: {reason}", font=tag_font, fill="#FFFFFF")
+        draw.text((170, 301), f"Date: {added_on}", font=tag_font, fill="#FFFFFF")
+    else:
+        draw.text((170, 255), "Tag: None", font=tag_font, fill="#FFFFFF")
 
     draw.text((40, height - 35), f"Last Updated: {row['last_updated'] or 'N/A'}", font=small_font, fill="#AAAAAA")
 

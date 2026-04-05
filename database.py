@@ -3,8 +3,6 @@ import hashlib
 from contextlib import contextmanager
 from typing import Any, Iterator, Optional
 
-from tags import is_valid_tag
-
 import psycopg2
 from psycopg2 import IntegrityError
 from psycopg2.extras import Json, RealDictCursor
@@ -85,22 +83,8 @@ def init_db():
         cur.execute("ALTER TABLE verified_users ADD COLUMN IF NOT EXISTS bedwars_star INTEGER")
         cur.execute("ALTER TABLE verified_users ADD COLUMN IF NOT EXISTS verified_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
         cur.execute("ALTER TABLE verified_users ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
-        cur.execute("ALTER TABLE verified_users ADD COLUMN IF NOT EXISTS tag TEXT")
-        cur.execute(
-            """
-            DO $$
-            BEGIN
-                IF NOT EXISTS (
-                    SELECT 1 FROM pg_constraint
-                    WHERE conname = 'verified_users_tag_allowed_values'
-                ) THEN
-                    ALTER TABLE verified_users
-                    ADD CONSTRAINT verified_users_tag_allowed_values
-                    CHECK (tag IS NULL OR tag IN ('caution', 'zero', 'admin', 'zako'));
-                END IF;
-            END$$;
-            """
-        )
+        cur.execute("ALTER TABLE verified_users DROP CONSTRAINT IF EXISTS verified_users_tag_allowed_values")
+        cur.execute("ALTER TABLE verified_users DROP COLUMN IF EXISTS tag")
         cur.execute(
             """
             CREATE TABLE IF NOT EXISTS players (
@@ -235,7 +219,7 @@ def save_uuid_cache(mcid: str, uuid: str):
 def get_player_by_discord(discord_user_id: str):
     with get_conn() as conn, conn.cursor(cursor_factory=RealDictCursor) as cur:
         cur.execute(
-            "SELECT discord_user_id, mcid, uuid, tag, verified_at, updated_at FROM verified_users WHERE discord_user_id = %s",
+            "SELECT discord_user_id, mcid, uuid, verified_at, updated_at FROM verified_users WHERE discord_user_id = %s",
             (int(discord_user_id),),
         )
         return _normalize_row_with_aliases(_fetchone_dict(cur))
@@ -244,7 +228,7 @@ def get_player_by_discord(discord_user_id: str):
 def get_player_by_uuid(minecraft_uuid: str):
     with get_conn() as conn, conn.cursor(cursor_factory=RealDictCursor) as cur:
         cur.execute(
-            "SELECT discord_user_id, mcid, uuid, tag, verified_at, updated_at FROM verified_users WHERE uuid = %s",
+            "SELECT discord_user_id, mcid, uuid, verified_at, updated_at FROM verified_users WHERE uuid = %s",
             (minecraft_uuid,),
         )
         row = _fetchone_dict(cur)
@@ -261,7 +245,7 @@ def get_player_by_uuid(minecraft_uuid: str):
 def get_player_by_username(minecraft_username: str):
     with get_conn() as conn, conn.cursor(cursor_factory=RealDictCursor) as cur:
         cur.execute(
-            "SELECT discord_user_id, mcid, uuid, tag, verified_at, updated_at FROM verified_users WHERE lower(mcid) = lower(%s)",
+            "SELECT discord_user_id, mcid, uuid, verified_at, updated_at FROM verified_users WHERE lower(mcid) = lower(%s)",
             (minecraft_username,),
         )
         return _normalize_row_with_aliases(_fetchone_dict(cur))
@@ -434,38 +418,6 @@ def get_registered_mcids_for_autocomplete(prefix: str = "", limit: int = 25) -> 
         return [str(row["mcid"]) for row in rows if row.get("mcid")]
 
 
-def set_player_tag_by_mcid(mcid: str, tag: str) -> bool:
-    normalized_tag = str(tag).strip().lower()
-    if not is_valid_tag(normalized_tag):
-        raise ValueError(f"Invalid tag: {tag}")
-
-    with get_conn() as conn, conn.cursor() as cur:
-        cur.execute(
-            """
-            UPDATE verified_users
-            SET tag = %s,
-                updated_at = NOW()
-            WHERE lower(mcid) = lower(%s)
-            """,
-            (normalized_tag, mcid.strip()),
-        )
-        return cur.rowcount > 0
-
-
-def clear_player_tag_by_mcid(mcid: str) -> bool:
-    with get_conn() as conn, conn.cursor() as cur:
-        cur.execute(
-            """
-            UPDATE verified_users
-            SET tag = NULL,
-                updated_at = NOW()
-            WHERE lower(mcid) = lower(%s)
-            """,
-            (mcid.strip(),),
-        )
-        return cur.rowcount > 0
-
-
 def upsert_player_stats(
     minecraft_uuid: str,
     minecraft_name: str,
@@ -566,11 +518,8 @@ def get_player_stats_by_uuid(minecraft_uuid: str):
                 ps.kdr,
                 ps.head_image_base64,
                 ps.raw_flashlight_json,
-                ps.last_updated,
-                vu.tag
+                ps.last_updated
             FROM player_stats ps
-            LEFT JOIN verified_users vu
-                ON vu.uuid = ps.minecraft_uuid
             WHERE ps.minecraft_uuid = %s
             """,
             (minecraft_uuid,),
@@ -620,8 +569,7 @@ def get_top_player_stats(metric: str, limit: int = 10):
                 ps.wlr,
                 ps.kdr,
                 ps.head_image_base64,
-                ps.last_updated,
-                vu.tag
+                ps.last_updated
             FROM player_stats ps
             INNER JOIN verified_users vu
                 ON vu.uuid = ps.minecraft_uuid
