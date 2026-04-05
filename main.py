@@ -2,12 +2,16 @@ import os
 import re
 import io
 import base64
+import asyncio
+from datetime import time
 from threading import Thread
 from typing import Optional
+from zoneinfo import ZoneInfo
 
 import discord
 import requests
 from discord import app_commands
+from discord.ext import tasks
 from flask import Flask
 
 from database import (
@@ -21,6 +25,7 @@ from database import (
     get_player_by_uuid,
     get_player_by_username,
     get_player_stats_by_uuid,
+    get_ranking_message_state,
     get_registered_mcids_for_autocomplete,
     get_top_player_stats,
     init_db,
@@ -31,6 +36,7 @@ from database import (
     set_config_value,
     update_player_head_image,
     update_player_uuid,
+    upsert_ranking_message_state,
     upsert_player_stats,
 )
 from ranking_renderer import (
@@ -47,6 +53,18 @@ FLASHLIGHT_PLAYERDATA_URL = "https://flashlight.prismoverlay.com/v1/playerdata"
 MOJANG_PROFILE_URL = "https://api.mojang.com/users/profiles/minecraft/{mcid}"
 SESSION_PROFILE_URL = "https://sessionserver.mojang.com/session/minecraft/profile/{uuid}"
 AUTHORIZED_USERS = [1278574483195559977]
+DAILY_UPDATE_TIME = time(hour=3, minute=0, tzinfo=ZoneInfo("Asia/Tokyo"))
+UPDATE_ALL_DELAY_SECONDS = 1.0
+RANKING_POST_INTERVAL_HOURS = 24
+RANKING_GUILD_ID = 1343197242533871676
+RANKING_CHANNELS = {
+    "star": 1490341322719232010,
+    "fkdr": 1490341920004636744,
+    "bblr": 1490341978792267897,
+    "wlr": 1490342088762724465,
+}
+RANKING_PAGE_SIZE = 10
+RANKING_MAX_PLAYERS = 100
 
 # --- 24時間稼働設定 ---
 app = Flask("")
@@ -536,6 +554,108 @@ def is_admin(user_id: int) -> bool:
     return user_id in AUTHORIZED_USERS
 
 
+def _chunk_rows(rows: list[dict], size: int) -> list[list[dict]]:
+    return [rows[i:i + size] for i in range(0, len(rows), size)]
+
+
+async def update_all_players() -> tuple[int, int]:
+    players = get_all_registered_players()
+    success = 0
+    failed = 0
+
+    for player in players:
+        try:
+            refreshed_uuid = refresh_player_identity(player["minecraft_username"]) or player["minecraft_uuid"]
+            fetch_and_store_player_stats(refreshed_uuid)
+            success += 1
+        except Exception as error:
+            failed += 1
+            print(
+                "⚠️ Failed to update player "
+                f"{player.get('minecraft_username', '(unknown)')} "
+                f"({player.get('minecraft_uuid', '(unknown uuid)')}): {error}"
+            )
+        finally:
+            await asyncio.sleep(UPDATE_ALL_DELAY_SECONDS)
+
+    return success, failed
+
+
+async def _refresh_ranking_channel(
+    guild: discord.Guild,
+    ranking_type: str,
+    channel_id: int,
+) -> tuple[int, int]:
+    channel = guild.get_channel(channel_id)
+    if not isinstance(channel, discord.TextChannel):
+        print(f"⚠️ Ranking channel not found or not text: type={ranking_type}, channel_id={channel_id}")
+        return 0, 0
+
+    old_state = get_ranking_message_state(guild.id, channel_id, ranking_type)
+    old_message_ids = old_state["message_ids"] if old_state else []
+    deleted = 0
+    for message_id in old_message_ids:
+        try:
+            message = await channel.fetch_message(int(message_id))
+            await message.delete()
+            deleted += 1
+        except discord.NotFound:
+            continue
+        except discord.Forbidden as error:
+            print(f"⚠️ No permission to delete ranking message {message_id}: {error}")
+        except discord.HTTPException as error:
+            print(f"⚠️ Failed to delete ranking message {message_id}: {error}")
+
+    rows = get_top_player_stats(ranking_type, limit=RANKING_MAX_PLAYERS)
+    if not rows:
+        upsert_ranking_message_state(guild.id, channel_id, ranking_type, [])
+        return deleted, 0
+
+    hydrated_rows = []
+    for row in rows:
+        if not row["head_image_base64"]:
+            head_image_base64 = _ensure_head_image_base64(row["minecraft_uuid"])
+            if head_image_base64:
+                fetch_and_store_player_stats(row["minecraft_uuid"])
+        refreshed_row = get_player_stats_by_uuid(row["minecraft_uuid"])
+        hydrated_rows.append(refreshed_row or row)
+
+    pages = _chunk_rows(hydrated_rows, RANKING_PAGE_SIZE)
+    sent_message_ids = []
+    for page_idx, page_rows in enumerate(pages):
+        image_bytes = render_ranking_image(
+            page_rows,
+            ranking_type,
+            show_title=(page_idx == 0),
+            rank_start=(page_idx * RANKING_PAGE_SIZE) + 1,
+        )
+        filename = (
+            f"bedwars_{_sanitize_filename(ranking_type)}_ranking_"
+            f"p{page_idx + 1}.png"
+        )
+        file = discord.File(image_bytes, filename=filename)
+        sent_message = await channel.send(file=file)
+        sent_message_ids.append(sent_message.id)
+
+    upsert_ranking_message_state(guild.id, channel_id, ranking_type, sent_message_ids)
+    return deleted, len(sent_message_ids)
+
+
+async def refresh_all_rankings() -> dict[str, tuple[int, int]]:
+    guild = bot.get_guild(RANKING_GUILD_ID)
+    if guild is None:
+        raise RuntimeError(f"Ranking target guild not found: {RANKING_GUILD_ID}")
+
+    results: dict[str, tuple[int, int]] = {}
+    for ranking_type, channel_id in RANKING_CHANNELS.items():
+        try:
+            results[ranking_type] = await _refresh_ranking_channel(guild, ranking_type, channel_id)
+        except Exception as error:
+            print(f"⚠️ Failed to refresh ranking {ranking_type}: {error}")
+            results[ranking_type] = (0, 0)
+    return results
+
+
 def admin_force_register_mcid(mcid: str):
     profile = fetch_player_profile(mcid)
     if not profile:
@@ -577,6 +697,10 @@ async def registered_mcid_autocomplete(
 @bot.event
 async def on_ready():
     init_db()
+    if not daily_update_all_task.is_running():
+        daily_update_all_task.start()
+    if not auto_refresh_rankings_task.is_running():
+        auto_refresh_rankings_task.start()
     try:
         synced = await tree.sync()
         print(f"✅ {len(synced)}個のコマンドを同期しました")
@@ -868,17 +992,7 @@ async def update(interaction: discord.Interaction, mcid_or_all: str):
 
     try:
         if target.lower() == "all":
-            players = get_all_registered_players()
-            success = 0
-            failed = 0
-            for player in players:
-                try:
-                    refreshed_uuid = refresh_player_identity(player["minecraft_username"]) or player["minecraft_uuid"]
-                    fetch_and_store_player_stats(refreshed_uuid)
-                    success += 1
-                except Exception:
-                    failed += 1
-
+            success, failed = await update_all_players()
             await interaction.followup.send(
                 f"Update complete. Success: {success}, Failed: {failed}",
                 ephemeral=True,
@@ -905,6 +1019,31 @@ async def update(interaction: discord.Interaction, mcid_or_all: str):
         )
     except Exception as error:
         await interaction.followup.send(f"⚠️ エラーが発生しました: {error}", ephemeral=True)
+
+
+@tasks.loop(time=DAILY_UPDATE_TIME)
+async def daily_update_all_task():
+    success, failed = await update_all_players()
+    print(f"🕒 Daily update complete. Success: {success}, Failed: {failed}")
+
+
+@daily_update_all_task.before_loop
+async def before_daily_update_all_task():
+    await bot.wait_until_ready()
+
+
+@tasks.loop(hours=RANKING_POST_INTERVAL_HOURS)
+async def auto_refresh_rankings_task():
+    try:
+        results = await refresh_all_rankings()
+        print(f"📊 Auto ranking refresh complete: {results}")
+    except Exception as error:
+        print(f"⚠️ Auto ranking refresh failed: {error}")
+
+
+@auto_refresh_rankings_task.before_loop
+async def before_auto_refresh_rankings_task():
+    await bot.wait_until_ready()
 
 
 @tree.command(name="stats", description="指定MCIDのBedwars統計を表示します")
@@ -953,6 +1092,7 @@ async def stats(interaction: discord.Interaction, mcid: str):
         app_commands.Choice(name="FKDR", value="fkdr"),
         app_commands.Choice(name="Wins", value="wins"),
         app_commands.Choice(name="Star", value="star"),
+        app_commands.Choice(name="BBLR", value="bblr"),
         app_commands.Choice(name="WLR", value="wlr"),
         app_commands.Choice(name="KDR", value="kdr"),
         app_commands.Choice(name="Final Kills", value="final_kills"),
@@ -964,12 +1104,13 @@ async def ranking(interaction: discord.Interaction, ranking_type: app_commands.C
     await interaction.response.defer()
 
     try:
-        rows = get_top_player_stats(ranking_type.value, limit=10)
+        rows = get_top_player_stats(ranking_type.value, limit=RANKING_MAX_PLAYERS)
         if not rows:
             await interaction.followup.send("ℹ️ ランキングに表示できるデータがありません。先に /update を実行してください。")
             return
         hydrated_rows = []
         for row in rows:
+            head_image_base64 = row["head_image_base64"]
             if not row["head_image_base64"]:
                 head_image_base64 = _ensure_head_image_base64(row["minecraft_uuid"])
                 if head_image_base64:
@@ -977,16 +1118,46 @@ async def ranking(interaction: discord.Interaction, ranking_type: app_commands.C
             refreshed_row = get_player_stats_by_uuid(row["minecraft_uuid"])
             hydrated_rows.append(refreshed_row or row)
 
-        image_bytes = render_ranking_image(hydrated_rows, ranking_type.value)
-        filename = f"bedwars_{_sanitize_filename(ranking_type.value)}_ranking.png"
-        file = discord.File(image_bytes, filename=filename)
-        await interaction.followup.send(file=file)
+        pages = _chunk_rows(hydrated_rows, RANKING_PAGE_SIZE)
+        for page_idx, page_rows in enumerate(pages):
+            image_bytes = render_ranking_image(
+                page_rows,
+                ranking_type.value,
+                show_title=(page_idx == 0),
+                rank_start=(page_idx * RANKING_PAGE_SIZE) + 1,
+            )
+            filename = (
+                f"bedwars_{_sanitize_filename(ranking_type.value)}_ranking_"
+                f"p{page_idx + 1}.png"
+            )
+            file = discord.File(image_bytes, filename=filename)
+            await interaction.followup.send(file=file)
     except RankingRenderError:
         await interaction.followup.send("⚠️ ランキング画像の生成に失敗しました。")
     except PlayerDataFetchError as error:
         await interaction.followup.send(error.message)
     except Exception as error:
         await interaction.followup.send(f"⚠️ エラーが発生しました: {error}")
+
+
+@tree.command(name="rankingrefresh", description="ランキング投稿を手動更新します（管理者用）")
+async def rankingrefresh(interaction: discord.Interaction):
+    await interaction.response.defer(ephemeral=True)
+    if not is_admin(interaction.user.id):
+        await interaction.followup.send("❌ You do not have permission to use this command.", ephemeral=True)
+        return
+
+    try:
+        results = await refresh_all_rankings()
+        lines = []
+        for ranking_type, (deleted_count, posted_count) in results.items():
+            lines.append(f"{ranking_type}: deleted={deleted_count}, posted={posted_count}")
+        await interaction.followup.send(
+            "✅ Ranking refresh completed.\n" + "\n".join(lines),
+            ephemeral=True,
+        )
+    except Exception as error:
+        await interaction.followup.send(f"⚠️ エラーが発生しました: {error}", ephemeral=True)
 
 
 @tree.command(name="head", description="指定MCIDの最新ヘッド画像を表示します")
