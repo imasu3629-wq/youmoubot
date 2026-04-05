@@ -55,7 +55,6 @@ SESSION_PROFILE_URL = "https://sessionserver.mojang.com/session/minecraft/profil
 AUTHORIZED_USERS = [1278574483195559977]
 DAILY_UPDATE_TIME = time(hour=3, minute=0, tzinfo=ZoneInfo("Asia/Tokyo"))
 UPDATE_ALL_DELAY_SECONDS = 1.0
-RANKING_POST_INTERVAL_HOURS = 24
 RANKING_GUILD_ID = 1343197242533871676
 RANKING_CHANNELS = {
     "star": 1490341322719232010,
@@ -65,6 +64,7 @@ RANKING_CHANNELS = {
 }
 RANKING_PAGE_SIZE = 10
 RANKING_MAX_PLAYERS = 100
+STARTUP_RANKINGS_POSTED = False
 
 # --- 24時間稼働設定 ---
 app = Flask("")
@@ -593,18 +593,7 @@ async def _refresh_ranking_channel(
 
     old_state = get_ranking_message_state(guild.id, channel_id, ranking_type)
     old_message_ids = old_state["message_ids"] if old_state else []
-    deleted = 0
-    for message_id in old_message_ids:
-        try:
-            message = await channel.fetch_message(int(message_id))
-            await message.delete()
-            deleted += 1
-        except discord.NotFound:
-            continue
-        except discord.Forbidden as error:
-            print(f"⚠️ No permission to delete ranking message {message_id}: {error}")
-        except discord.HTTPException as error:
-            print(f"⚠️ Failed to delete ranking message {message_id}: {error}")
+    deleted = await _delete_old_ranking_messages(channel, ranking_type, old_message_ids)
 
     rows = get_top_player_stats(ranking_type, limit=RANKING_MAX_PLAYERS)
     if not rows:
@@ -639,6 +628,51 @@ async def _refresh_ranking_channel(
 
     upsert_ranking_message_state(guild.id, channel_id, ranking_type, sent_message_ids)
     return deleted, len(sent_message_ids)
+
+
+async def _delete_old_ranking_messages(
+    channel: discord.TextChannel,
+    ranking_type: str,
+    stored_message_ids: list[int],
+) -> int:
+    deleted = 0
+    seen_message_ids = set()
+    for message_id in stored_message_ids:
+        try:
+            message = await channel.fetch_message(int(message_id))
+            if message.author.id != bot.user.id:
+                continue
+            await message.delete()
+            deleted += 1
+            seen_message_ids.add(int(message_id))
+        except discord.NotFound:
+            continue
+        except discord.Forbidden as error:
+            print(f"⚠️ No permission to delete ranking message {message_id}: {error}")
+        except discord.HTTPException as error:
+            print(f"⚠️ Failed to delete ranking message {message_id}: {error}")
+
+    ranking_prefix = f"bedwars_{_sanitize_filename(ranking_type)}_ranking_"
+    try:
+        async for message in channel.history(limit=200):
+            if message.author.id != bot.user.id or message.id in seen_message_ids:
+                continue
+            if not message.attachments:
+                continue
+            if any(att.filename.startswith(ranking_prefix) for att in message.attachments):
+                try:
+                    await message.delete()
+                    deleted += 1
+                except discord.Forbidden as error:
+                    print(f"⚠️ No permission to delete ranking message {message.id}: {error}")
+                except discord.HTTPException as error:
+                    print(f"⚠️ Failed to delete ranking message {message.id}: {error}")
+    except discord.Forbidden as error:
+        print(f"⚠️ No permission to read channel history for ranking cleanup: {error}")
+    except discord.HTTPException as error:
+        print(f"⚠️ Failed to read channel history for ranking cleanup: {error}")
+
+    return deleted
 
 
 async def refresh_all_rankings() -> dict[str, tuple[int, int]]:
@@ -696,11 +730,17 @@ async def registered_mcid_autocomplete(
 
 @bot.event
 async def on_ready():
+    global STARTUP_RANKINGS_POSTED
     init_db()
     if not daily_update_all_task.is_running():
         daily_update_all_task.start()
-    if not auto_refresh_rankings_task.is_running():
-        auto_refresh_rankings_task.start()
+    if not STARTUP_RANKINGS_POSTED:
+        try:
+            results = await refresh_all_rankings()
+            print(f"📌 Startup ranking refresh complete: {results}")
+            STARTUP_RANKINGS_POSTED = True
+        except Exception as error:
+            print(f"⚠️ Startup ranking refresh failed: {error}")
     try:
         synced = await tree.sync()
         print(f"✅ {len(synced)}個のコマンドを同期しました")
@@ -978,38 +1018,32 @@ async def updateapi(interaction: discord.Interaction, api_key: str):
     await interaction.followup.send("Hypixel API key updated successfully.", ephemeral=True)
 
 
-@tree.command(name="update", description="Bedwars stats を更新します（管理者用）")
-async def update(interaction: discord.Interaction, mcid_or_all: str):
+@tree.command(name="update", description="全登録プレイヤーの Bedwars stats を更新します（管理者用）")
+@app_commands.choices(
+    target=[
+        app_commands.Choice(name="all", value="all"),
+    ]
+)
+async def update(interaction: discord.Interaction, target: app_commands.Choice[str]):
     await interaction.response.defer(ephemeral=True)
     if not is_admin(interaction.user.id):
         await interaction.followup.send("❌ You do not have permission to use this command.", ephemeral=True)
         return
 
-    target = mcid_or_all.strip()
-    if not target:
-        await interaction.followup.send("❌ Please provide a target (all, MC username, or UUID).", ephemeral=True)
-        return
-
     try:
-        if target.lower() == "all":
-            success, failed = await update_all_players()
-            await interaction.followup.send(
-                f"Update complete. Success: {success}, Failed: {failed}",
-                ephemeral=True,
-            )
+        if target.value != "all":
+            await interaction.followup.send("❌ Only '/update all' is supported.", ephemeral=True)
             return
-
-        uuid = refresh_player_identity(target)
-        if not uuid:
-            await interaction.followup.send("❌ Invalid MCID / username not found.", ephemeral=True)
-            return
-
-        if not get_player_by_uuid(uuid):
-            await interaction.followup.send("ℹ️ This MCID is not registered.", ephemeral=True)
-            return
-
-        fetch_and_store_player_stats(uuid)
-        await interaction.followup.send("✅ Player stats updated successfully.", ephemeral=True)
+        success, failed = await update_all_players()
+        ranking_results = await refresh_all_rankings()
+        ranking_summary = ", ".join(
+            f"{ranking_type}: posted={posted}"
+            for ranking_type, (_, posted) in ranking_results.items()
+        )
+        await interaction.followup.send(
+            f"✅ Update complete. Success: {success}, Failed: {failed}\nRanking refresh: {ranking_summary}",
+            ephemeral=True,
+        )
     except (VerificationError, PlayerDataFetchError) as error:
         await interaction.followup.send(error.message, ephemeral=True)
     except requests.RequestException:
@@ -1025,24 +1059,12 @@ async def update(interaction: discord.Interaction, mcid_or_all: str):
 async def daily_update_all_task():
     success, failed = await update_all_players()
     print(f"🕒 Daily update complete. Success: {success}, Failed: {failed}")
+    ranking_results = await refresh_all_rankings()
+    print(f"📊 Daily ranking refresh complete: {ranking_results}")
 
 
 @daily_update_all_task.before_loop
 async def before_daily_update_all_task():
-    await bot.wait_until_ready()
-
-
-@tasks.loop(hours=RANKING_POST_INTERVAL_HOURS)
-async def auto_refresh_rankings_task():
-    try:
-        results = await refresh_all_rankings()
-        print(f"📊 Auto ranking refresh complete: {results}")
-    except Exception as error:
-        print(f"⚠️ Auto ranking refresh failed: {error}")
-
-
-@auto_refresh_rankings_task.before_loop
-async def before_auto_refresh_rankings_task():
     await bot.wait_until_ready()
 
 
