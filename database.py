@@ -149,10 +149,12 @@ def init_db():
                 wlr DOUBLE PRECISION NOT NULL DEFAULT 0,
                 kdr DOUBLE PRECISION NOT NULL DEFAULT 0,
                 head_image_base64 TEXT,
+                raw_flashlight_json JSONB,
                 last_updated TIMESTAMP DEFAULT NOW()
             )
             """
         )
+        cur.execute("ALTER TABLE player_stats ADD COLUMN IF NOT EXISTS raw_flashlight_json JSONB")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_player_stats_name ON player_stats (minecraft_name)")
 
 
@@ -451,6 +453,7 @@ def upsert_player_stats(
     wlr: float,
     kdr: float,
     head_image_base64: Optional[str] = None,
+    raw_flashlight_json: Optional[Any] = None,
 ):
     with get_conn() as conn, conn.cursor() as cur:
         cur.execute(
@@ -473,8 +476,9 @@ def upsert_player_stats(
                 wlr,
                 kdr,
                 head_image_base64,
+                raw_flashlight_json,
                 last_updated
-            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW())
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW())
             ON CONFLICT(minecraft_uuid) DO UPDATE SET
                 minecraft_name = EXCLUDED.minecraft_name,
                 bedwars_star = EXCLUDED.bedwars_star,
@@ -492,6 +496,7 @@ def upsert_player_stats(
                 wlr = EXCLUDED.wlr,
                 kdr = EXCLUDED.kdr,
                 head_image_base64 = COALESCE(EXCLUDED.head_image_base64, player_stats.head_image_base64),
+                raw_flashlight_json = EXCLUDED.raw_flashlight_json,
                 last_updated = NOW()
             """,
             (
@@ -512,6 +517,7 @@ def upsert_player_stats(
                 wlr,
                 kdr,
                 head_image_base64,
+                raw_flashlight_json,
             ),
         )
 
@@ -525,7 +531,10 @@ def get_player_stats_by_uuid(minecraft_uuid: str):
                 ps.minecraft_name,
                 ps.bedwars_star,
                 ps.fkdr,
+                ps.wlr,
+                ps.kdr,
                 ps.head_image_base64,
+                ps.raw_flashlight_json,
                 ps.last_updated,
                 vu.tag
             FROM player_stats ps

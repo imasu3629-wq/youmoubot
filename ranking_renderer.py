@@ -387,7 +387,7 @@ def render_stats_image(row: Any) -> io.BytesIO:
     tags = _extract_tags(row.get("tag"))
     tag_meanings = [TAG_INFO[tag]["meaning"] for tag in tags if tag in TAG_INFO]
     has_tag_meanings = bool(tag_meanings)
-    base_height = 280
+    base_height = 320
     tag_line_height = 28
     extra_height = tag_line_height if has_tag_meanings else 0
     height = base_height + extra_height
@@ -437,10 +437,12 @@ def render_stats_image(row: Any) -> io.BytesIO:
         get_prestige_style(max(star, 0)),
     )
     draw.text((170, 195), f"FKDR: {_safe_float(row['fkdr']):.2f}", font=body_font, fill="#55FFFF")
+    draw.text((350, 195), f"WLR: {_safe_float(row.get('wlr')):.2f}", font=body_font, fill="#55FFFF")
+    draw.text((500, 195), f"KDR: {_safe_float(row.get('kdr')):.2f}", font=body_font, fill="#55FFFF")
     if has_tag_meanings:
         tag_line = " / ".join(tag_meanings)
         draw.text(
-            (170, 235),
+            (170, 255),
             f"Tag: {tag_line}",
             font=tag_font,
             fill="#FFFFFF",
