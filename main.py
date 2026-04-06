@@ -16,6 +16,8 @@ from flask import Flask
 
 from database import (
     IntegrityError,
+    add_hidden_urchin_mcid,
+    add_manual_tag,
     delete_registered_player_data_by_uuid,
     delete_player_registration_by_uuid,
     get_all_registered_players,
@@ -24,11 +26,19 @@ from database import (
     get_player_by_discord,
     get_player_by_uuid,
     get_player_by_username,
+    get_registered_player_by_mcid,
     get_player_stats_by_uuid,
     get_ranking_message_state,
     get_registered_mcids_for_autocomplete,
     get_top_player_stats,
+    has_manual_tag,
     init_db,
+    is_hidden_urchin_mcid,
+    list_hidden_urchin_mcids,
+    list_manual_tags_for_mcid,
+    list_mcids_by_manual_tag,
+    remove_hidden_urchin_mcid,
+    remove_manual_tag,
     register_verified_player,
     save_uuid_cache,
     set_config_value,
@@ -63,6 +73,9 @@ RANKING_CHANNELS = {
 RANKING_PAGE_SIZE = 10
 RANKING_MAX_PLAYERS = 100
 STARTUP_RANKINGS_POSTED = False
+MANUAL_TAG_ASSET_MAP = {
+    "zero": "Zero.PNG",
+}
 
 # --- 24時間稼働設定 ---
 app = Flask("")
@@ -556,12 +569,52 @@ def _chunk_rows(rows: list[dict], size: int) -> list[list[dict]]:
     return [rows[i:i + size] for i in range(0, len(rows), size)]
 
 
-def _attach_urchin_tag(row: dict | None) -> dict | None:
+def _normalize_tag_key(tag_name: str) -> str:
+    return str(tag_name or "").strip().lower()
+
+
+def list_supported_manual_tags() -> list[str]:
+    return sorted(MANUAL_TAG_ASSET_MAP.keys())
+
+
+def _resolve_urchin_tag_for_mcid(mcid: str) -> dict | None:
+    tags = fetch_urchin_tags(str(mcid or ""))
+    return get_highest_priority_urchin_tag(tags)
+
+
+def resolve_display_tag_for_mcid(
+    mcid: str,
+    hidden_urchin: Optional[bool] = None,
+    urchin_tag: Optional[dict] = None,
+) -> dict[str, str] | None:
+    normalized_mcid = str(mcid or "").strip()
+    if not normalized_mcid:
+        return None
+
+    resolved_hidden_urchin = is_hidden_urchin_mcid(normalized_mcid) if hidden_urchin is None else hidden_urchin
+    resolved_urchin_tag = _resolve_urchin_tag_for_mcid(normalized_mcid) if urchin_tag is None else urchin_tag
+    if resolved_urchin_tag and not resolved_hidden_urchin:
+        return {"source": "urchin", "tag": str(resolved_urchin_tag.get("tag") or "")}
+
+    manual_tags = list_manual_tags_for_mcid(normalized_mcid)
+    for manual_tag in manual_tags:
+        if _normalize_tag_key(manual_tag) in MANUAL_TAG_ASSET_MAP:
+            return {"source": "manual", "tag": _normalize_tag_key(manual_tag)}
+    return None
+
+
+def _attach_resolved_tag(row: dict | None) -> dict | None:
     if not row:
         return row
-    tags = fetch_urchin_tags(str(row.get("minecraft_name") or ""))
+    mcid = str(row.get("minecraft_name") or "")
+    hidden_urchin = is_hidden_urchin_mcid(mcid)
+    urchin_tag = _resolve_urchin_tag_for_mcid(mcid)
+    display_tag = resolve_display_tag_for_mcid(mcid, hidden_urchin=hidden_urchin, urchin_tag=urchin_tag)
+
     enriched_row = dict(row)
-    enriched_row["urchin_tag"] = get_highest_priority_urchin_tag(tags)
+    enriched_row["hidden_urchin_tag"] = hidden_urchin
+    enriched_row["urchin_tag"] = urchin_tag if (urchin_tag and not hidden_urchin) else None
+    enriched_row["display_tag"] = display_tag
     return enriched_row
 
 
@@ -614,7 +667,7 @@ async def _refresh_ranking_channel(
             if head_image_base64:
                 fetch_and_store_player_stats(row["minecraft_uuid"])
         refreshed_row = get_player_stats_by_uuid(row["minecraft_uuid"])
-        hydrated_rows.append(_attach_urchin_tag(refreshed_row or row))
+        hydrated_rows.append(_attach_resolved_tag(refreshed_row or row))
 
     pages = _chunk_rows(hydrated_rows, RANKING_PAGE_SIZE)
     sent_message_ids = []
@@ -733,6 +786,31 @@ async def registered_mcid_autocomplete(
 ) -> list[app_commands.Choice[str]]:
     candidates = get_registered_mcids_for_autocomplete(current, limit=25)
     return [app_commands.Choice(name=mcid, value=mcid) for mcid in candidates]
+
+
+async def manual_tag_autocomplete(
+    interaction: discord.Interaction,
+    current: str,
+) -> list[app_commands.Choice[str]]:
+    normalized_current = _normalize_tag_key(current)
+    choices = []
+    for tag_name in list_supported_manual_tags():
+        if normalized_current and not tag_name.startswith(normalized_current):
+            continue
+        choices.append(app_commands.Choice(name=tag_name.capitalize(), value=tag_name))
+    return choices[:25]
+
+
+async def manual_tagged_mcid_autocomplete(
+    interaction: discord.Interaction,
+    current: str,
+) -> list[app_commands.Choice[str]]:
+    namespace = getattr(interaction, "namespace", None)
+    selected_tag = _normalize_tag_key(getattr(namespace, "tag_name", "") if namespace else "")
+    if not selected_tag:
+        return await registered_mcid_autocomplete(interaction, current)
+    mcids = list_mcids_by_manual_tag(selected_tag, prefix=current, limit=25)
+    return [app_commands.Choice(name=mcid, value=mcid) for mcid in mcids]
 
 
 @bot.event
@@ -938,6 +1016,116 @@ async def delete(interaction: discord.Interaction, mcid: str):
     await interaction.followup.send("✅ Registered MCID and related data deleted successfully.", ephemeral=True)
 
 
+@tree.command(name="kaku", description="Urchinタグ表示を非表示にします（管理者用）")
+@app_commands.describe(mcid="Minecraft username")
+@app_commands.autocomplete(mcid=registered_mcid_autocomplete)
+async def kaku(interaction: discord.Interaction, mcid: str):
+    await interaction.response.defer(ephemeral=True)
+    if not is_admin(interaction.user.id):
+        await interaction.followup.send("❌ You do not have permission to use this command.", ephemeral=True)
+        return
+
+    registered = get_registered_player_by_mcid(mcid)
+    if not registered:
+        await interaction.followup.send("❌ This MCID is not registered in the bot database.", ephemeral=True)
+        return
+
+    added = add_hidden_urchin_mcid(str(registered["mcid"]), interaction.user.id)
+    if not added:
+        await interaction.followup.send("ℹ️ This MCID is already in the hidden-Urchin list.", ephemeral=True)
+        return
+    await interaction.followup.send(f"✅ Hidden Urchin tag output for `{registered['mcid']}`.", ephemeral=True)
+
+
+@tree.command(name="kakulist", description="Urchinタグ非表示MCID一覧を表示します（管理者用）")
+async def kakulist(interaction: discord.Interaction):
+    await interaction.response.defer(ephemeral=True)
+    if not is_admin(interaction.user.id):
+        await interaction.followup.send("❌ You do not have permission to use this command.", ephemeral=True)
+        return
+
+    hidden_mcids = list_hidden_urchin_mcids()
+    if not hidden_mcids:
+        await interaction.followup.send("ℹ️ Hidden-Urchin list is empty.", ephemeral=True)
+        return
+    formatted = "\n".join(f"- {mcid}" for mcid in hidden_mcids)
+    await interaction.followup.send(f"📋 Hidden Urchin MCIDs:\n{formatted}", ephemeral=True)
+
+
+@tree.command(name="kakuno", description="Urchinタグ非表示を解除します（管理者用）")
+@app_commands.describe(mcid="Minecraft username")
+@app_commands.autocomplete(mcid=registered_mcid_autocomplete)
+async def kakuno(interaction: discord.Interaction, mcid: str):
+    await interaction.response.defer(ephemeral=True)
+    if not is_admin(interaction.user.id):
+        await interaction.followup.send("❌ You do not have permission to use this command.", ephemeral=True)
+        return
+
+    removed = remove_hidden_urchin_mcid(mcid)
+    if not removed:
+        await interaction.followup.send("ℹ️ This MCID is not in the hidden-Urchin list.", ephemeral=True)
+        return
+    await interaction.followup.send(f"✅ Restored Urchin tag visibility for `{mcid}`.", ephemeral=True)
+
+
+@tree.command(name="tag", description="手動カスタムタグを設定します（管理者用）")
+@app_commands.describe(tag_name="Manual custom tag", mcid="Minecraft username")
+@app_commands.autocomplete(tag_name=manual_tag_autocomplete, mcid=registered_mcid_autocomplete)
+async def tag(interaction: discord.Interaction, tag_name: str, mcid: str):
+    await interaction.response.defer(ephemeral=True)
+    if not is_admin(interaction.user.id):
+        await interaction.followup.send("❌ You do not have permission to use this command.", ephemeral=True)
+        return
+
+    normalized_tag = _normalize_tag_key(tag_name)
+    if normalized_tag not in list_supported_manual_tags():
+        await interaction.followup.send("❌ Unsupported manual tag.", ephemeral=True)
+        return
+
+    registered = get_registered_player_by_mcid(mcid)
+    if not registered:
+        await interaction.followup.send("❌ This MCID is not registered in the bot database.", ephemeral=True)
+        return
+
+    canonical_mcid = str(registered["mcid"])
+    if has_manual_tag(canonical_mcid, normalized_tag):
+        await interaction.followup.send(f"ℹ️ `{canonical_mcid}` already has manual tag `{normalized_tag}`.", ephemeral=True)
+        return
+
+    added = add_manual_tag(canonical_mcid, normalized_tag, interaction.user.id)
+    if not added:
+        await interaction.followup.send("⚠️ Failed to add manual tag.", ephemeral=True)
+        return
+    await interaction.followup.send(f"✅ Added manual tag `{normalized_tag}` to `{canonical_mcid}`.", ephemeral=True)
+
+
+@tree.command(name="tagremove", description="手動カスタムタグを削除します（管理者用）")
+@app_commands.describe(tag_name="Manual custom tag", mcid="Minecraft username")
+@app_commands.autocomplete(tag_name=manual_tag_autocomplete, mcid=manual_tagged_mcid_autocomplete)
+async def tagremove(interaction: discord.Interaction, tag_name: str, mcid: str):
+    await interaction.response.defer(ephemeral=True)
+    if not is_admin(interaction.user.id):
+        await interaction.followup.send("❌ You do not have permission to use this command.", ephemeral=True)
+        return
+
+    normalized_tag = _normalize_tag_key(tag_name)
+    if normalized_tag not in list_supported_manual_tags():
+        await interaction.followup.send("❌ Unsupported manual tag.", ephemeral=True)
+        return
+
+    registered = get_registered_player_by_mcid(mcid)
+    if not registered:
+        await interaction.followup.send("❌ This MCID is not registered in the bot database.", ephemeral=True)
+        return
+
+    canonical_mcid = str(registered["mcid"])
+    removed = remove_manual_tag(canonical_mcid, normalized_tag)
+    if not removed:
+        await interaction.followup.send(f"ℹ️ `{canonical_mcid}` does not have manual tag `{normalized_tag}`.", ephemeral=True)
+        return
+    await interaction.followup.send(f"✅ Removed manual tag `{normalized_tag}` from `{canonical_mcid}`.", ephemeral=True)
+
+
 
 
 @tree.command(name="updateapi", description="Hypixel API キーを更新します（管理者用）")
@@ -1033,7 +1221,7 @@ async def stats(interaction: discord.Interaction, mcid: str):
             await interaction.followup.send("ℹ️ 統計データが見つかりませんでした。")
             return
 
-        row = _attach_urchin_tag(row)
+        row = _attach_resolved_tag(row)
         image_bytes = render_stats_image(row)
         filename = f"bedwars_stats_{_sanitize_filename(str(row['minecraft_name']))}.png"
         file = discord.File(image_bytes, filename=filename)
@@ -1079,7 +1267,7 @@ async def ranking(interaction: discord.Interaction, ranking_type: app_commands.C
                 if head_image_base64:
                     fetch_and_store_player_stats(row["minecraft_uuid"])
             refreshed_row = get_player_stats_by_uuid(row["minecraft_uuid"])
-            hydrated_rows.append(_attach_urchin_tag(refreshed_row or row))
+            hydrated_rows.append(_attach_resolved_tag(refreshed_row or row))
 
         pages = _chunk_rows(hydrated_rows, RANKING_PAGE_SIZE)
         for page_idx, page_rows in enumerate(pages):
