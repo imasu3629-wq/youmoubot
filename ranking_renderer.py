@@ -404,13 +404,15 @@ def _get_display_tag_payload(row: Any) -> dict[str, str] | None:
     if isinstance(payload, dict):
         tag_name = str(payload.get("tag") or "").strip()
         source = str(payload.get("source") or "").strip()
+        reason = str(payload.get("reason") or "").strip()
         if tag_name:
-            return {"tag": tag_name, "source": source}
+            return {"tag": tag_name, "source": source, "reason": reason}
     selected_tag = row.get("urchin_tag")
     if isinstance(selected_tag, dict):
         raw_tag = str(selected_tag.get("tag") or "").strip()
+        reason = str(selected_tag.get("reason") or "").strip()
         if raw_tag:
-            return {"tag": raw_tag, "source": "urchin"}
+            return {"tag": raw_tag, "source": "urchin", "reason": reason}
     return None
 
 
@@ -479,6 +481,28 @@ def _wrap_text_by_width(
     if current_line:
         wrapped_lines.append(current_line)
     return wrapped_lines
+
+
+def _truncate_text_with_ellipsis(
+    draw: ImageDraw.ImageDraw,
+    text: str,
+    font: ImageFont.ImageFont,
+    max_width: int,
+) -> str:
+    value = str(text or "").strip()
+    if not value:
+        return ""
+    if _measure_text_width(draw, value, font) <= max_width:
+        return value
+
+    ellipsis = "..."
+    if _measure_text_width(draw, ellipsis, font) > max_width:
+        return ""
+
+    truncated = value
+    while truncated and _measure_text_width(draw, f"{truncated}{ellipsis}", font) > max_width:
+        truncated = truncated[:-1]
+    return f"{truncated}{ellipsis}" if truncated else ellipsis
 
 
 def _latest_timestamp(rows: list[Any]) -> str:
@@ -779,10 +803,10 @@ def render_stats_image(row: Any) -> io.BytesIO:
     draw_rounded_panel(draw, (340, 140, 1260, 270))
     draw_text_with_shadow(draw, (360, 152), "Ratios", body_font)
     ratio_specs = [
-        ("FKDR", 360, safe_ratio_text(row.get("fkdr")), (190, 110, 255)),
-        ("WLR", 580, safe_ratio_text(row.get("wlr")), (190, 110, 255)),
+        ("FKDR", 360, safe_ratio_text(row.get("fkdr")), (255, 195, 40)),
+        ("WLR", 580, safe_ratio_text(row.get("wlr")), (255, 195, 40)),
         ("KDR", 800, safe_ratio_text(row.get("kdr")), (255, 195, 40)),
-        ("BBLR", 1020, f"{calculate_bblr(get_stat([('beds_broken',), ('beds_broken_bedwars',)], 'beds_broken'), get_stat([('beds_lost',), ('beds_lost_bedwars',)], 'beds_lost')):.2f}", (190, 110, 255)),
+        ("BBLR", 1020, f"{calculate_bblr(get_stat([('beds_broken',), ('beds_broken_bedwars',)], 'beds_broken'), get_stat([('beds_lost',), ('beds_lost_bedwars',)], 'beds_lost')):.2f}", (255, 195, 40)),
     ]
     ratio_centers = [462, 682, 902, 1122]
     for idx, (label, box_x, value, color) in enumerate(ratio_specs):
@@ -836,6 +860,10 @@ def render_stats_image(row: Any) -> io.BytesIO:
     draw_text_with_shadow(draw, (740, 595), f"Updated: {updated_text}", small_font, (235, 235, 235))
     source_value = str((display_tag or {}).get("source") or "")
     source_text = "Source: Urchin" if source_value.lower() == "urchin" else "Source: Manual"
+    reason_value = str((display_tag or {}).get("reason") or "").strip()
+    reason_text = f"Reason: {reason_value}" if reason_value else "Reason: N/A"
+    reason_text = _truncate_text_with_ellipsis(draw, reason_text, small_font, max_width=500)
+    draw_text_with_shadow(draw, (740, 560), reason_text, small_font, (190, 195, 205))
     draw_text_with_shadow(draw, (740, 630), source_text, small_font, (190, 195, 205))
 
     final_canvas = Image.alpha_composite(canvas, overlay)

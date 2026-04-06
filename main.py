@@ -610,7 +610,11 @@ def resolve_display_tag_for_mcid(
     resolved_hidden_urchin = is_hidden_urchin_mcid(normalized_mcid) if hidden_urchin is None else hidden_urchin
     resolved_urchin_tag = _resolve_urchin_tag_for_mcid(normalized_mcid) if urchin_tag is None else urchin_tag
     if resolved_urchin_tag and not resolved_hidden_urchin:
-        return {"source": "urchin", "tag": str(resolved_urchin_tag.get("tag") or "")}
+        return {
+            "source": "urchin",
+            "tag": str(resolved_urchin_tag.get("tag") or ""),
+            "reason": str(resolved_urchin_tag.get("reason") or ""),
+        }
 
     manual_tags = list_manual_tags_for_mcid(normalized_mcid)
     for manual_tag in manual_tags:
