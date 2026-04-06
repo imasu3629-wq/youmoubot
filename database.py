@@ -171,6 +171,27 @@ def init_db():
             )
             """
         )
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS hidden_urchin_tags (
+                mcid TEXT PRIMARY KEY,
+                created_at TIMESTAMP DEFAULT NOW(),
+                added_by BIGINT NOT NULL
+            )
+            """
+        )
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS manual_tags (
+                mcid TEXT NOT NULL,
+                tag_name TEXT NOT NULL,
+                created_at TIMESTAMP DEFAULT NOW(),
+                added_by BIGINT NOT NULL,
+                PRIMARY KEY (mcid, tag_name)
+            )
+            """
+        )
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_manual_tags_tag_name ON manual_tags (tag_name)")
 
 
 def _admin_shadow_id(minecraft_uuid: str) -> int:
@@ -314,18 +335,30 @@ def delete_player_registration_by_discord(discord_user_id: str) -> bool:
 
 def delete_player_registration_by_uuid(minecraft_uuid: str) -> bool:
     with get_conn() as conn, conn.cursor() as cur:
+        cur.execute("SELECT mcid FROM verified_users WHERE uuid = %s", (minecraft_uuid,))
+        row = cur.fetchone()
+        mcid = str(row[0]).strip().lower() if row and row[0] else None
         cur.execute("DELETE FROM verified_users WHERE uuid = %s", (minecraft_uuid,))
         deleted = cur.rowcount > 0
         cur.execute("DELETE FROM players WHERE minecraft_uuid = %s", (minecraft_uuid,))
+        if mcid:
+            cur.execute("DELETE FROM hidden_urchin_tags WHERE mcid = %s", (mcid,))
+            cur.execute("DELETE FROM manual_tags WHERE mcid = %s", (mcid,))
         return deleted
 
 
 def delete_registered_player_data_by_uuid(minecraft_uuid: str) -> bool:
     with get_conn() as conn, conn.cursor() as cur:
+        cur.execute("SELECT mcid FROM verified_users WHERE uuid = %s", (minecraft_uuid,))
+        row = cur.fetchone()
+        mcid = str(row[0]).strip().lower() if row and row[0] else None
         cur.execute("DELETE FROM verified_users WHERE uuid = %s", (minecraft_uuid,))
         deleted = cur.rowcount > 0
         cur.execute("DELETE FROM players WHERE minecraft_uuid = %s", (minecraft_uuid,))
         cur.execute("DELETE FROM player_stats WHERE minecraft_uuid = %s", (minecraft_uuid,))
+        if mcid:
+            cur.execute("DELETE FROM hidden_urchin_tags WHERE mcid = %s", (mcid,))
+            cur.execute("DELETE FROM manual_tags WHERE mcid = %s", (mcid,))
         return deleted
 
 
@@ -413,6 +446,163 @@ def get_registered_mcids_for_autocomplete(prefix: str = "", limit: int = 25) -> 
                 LIMIT %s
                 """,
                 (limit,),
+            )
+        rows = _fetchall_dict(cur)
+        return [str(row["mcid"]) for row in rows if row.get("mcid")]
+
+
+def get_registered_player_by_mcid(mcid: str) -> Optional[dict[str, Any]]:
+    normalized_mcid = (mcid or "").strip().lower()
+    if not normalized_mcid:
+        return None
+    with get_conn() as conn, conn.cursor(cursor_factory=RealDictCursor) as cur:
+        cur.execute(
+            """
+            SELECT mcid, uuid
+            FROM verified_users
+            WHERE lower(mcid) = %s
+            LIMIT 1
+            """,
+            (normalized_mcid,),
+        )
+        return _fetchone_dict(cur)
+
+
+def _normalize_mcid_key(mcid: str) -> str:
+    return (mcid or "").strip().lower()
+
+
+def _normalize_tag_key(tag_name: str) -> str:
+    return (tag_name or "").strip().lower()
+
+
+def add_hidden_urchin_mcid(mcid: str, added_by: int) -> bool:
+    normalized_mcid = _normalize_mcid_key(mcid)
+    if not normalized_mcid:
+        return False
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO hidden_urchin_tags (mcid, added_by)
+            VALUES (%s, %s)
+            ON CONFLICT (mcid) DO NOTHING
+            """,
+            (normalized_mcid, int(added_by)),
+        )
+        return cur.rowcount > 0
+
+
+def remove_hidden_urchin_mcid(mcid: str) -> bool:
+    normalized_mcid = _normalize_mcid_key(mcid)
+    if not normalized_mcid:
+        return False
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute("DELETE FROM hidden_urchin_tags WHERE mcid = %s", (normalized_mcid,))
+        return cur.rowcount > 0
+
+
+def is_hidden_urchin_mcid(mcid: str) -> bool:
+    normalized_mcid = _normalize_mcid_key(mcid)
+    if not normalized_mcid:
+        return False
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute("SELECT 1 FROM hidden_urchin_tags WHERE mcid = %s", (normalized_mcid,))
+        return cur.fetchone() is not None
+
+
+def list_hidden_urchin_mcids() -> list[str]:
+    with get_conn() as conn, conn.cursor(cursor_factory=RealDictCursor) as cur:
+        cur.execute("SELECT mcid FROM hidden_urchin_tags ORDER BY mcid ASC")
+        rows = _fetchall_dict(cur)
+        return [str(row["mcid"]) for row in rows if row.get("mcid")]
+
+
+def add_manual_tag(mcid: str, tag_name: str, added_by: int) -> bool:
+    normalized_mcid = _normalize_mcid_key(mcid)
+    normalized_tag = _normalize_tag_key(tag_name)
+    if not normalized_mcid or not normalized_tag:
+        return False
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO manual_tags (mcid, tag_name, added_by)
+            VALUES (%s, %s, %s)
+            ON CONFLICT (mcid, tag_name) DO NOTHING
+            """,
+            (normalized_mcid, normalized_tag, int(added_by)),
+        )
+        return cur.rowcount > 0
+
+
+def remove_manual_tag(mcid: str, tag_name: str) -> bool:
+    normalized_mcid = _normalize_mcid_key(mcid)
+    normalized_tag = _normalize_tag_key(tag_name)
+    if not normalized_mcid or not normalized_tag:
+        return False
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute("DELETE FROM manual_tags WHERE mcid = %s AND tag_name = %s", (normalized_mcid, normalized_tag))
+        return cur.rowcount > 0
+
+
+def has_manual_tag(mcid: str, tag_name: str) -> bool:
+    normalized_mcid = _normalize_mcid_key(mcid)
+    normalized_tag = _normalize_tag_key(tag_name)
+    if not normalized_mcid or not normalized_tag:
+        return False
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            "SELECT 1 FROM manual_tags WHERE mcid = %s AND tag_name = %s",
+            (normalized_mcid, normalized_tag),
+        )
+        return cur.fetchone() is not None
+
+
+def list_manual_tags_for_mcid(mcid: str) -> list[str]:
+    normalized_mcid = _normalize_mcid_key(mcid)
+    if not normalized_mcid:
+        return []
+    with get_conn() as conn, conn.cursor(cursor_factory=RealDictCursor) as cur:
+        cur.execute(
+            """
+            SELECT tag_name
+            FROM manual_tags
+            WHERE mcid = %s
+            ORDER BY tag_name ASC
+            """,
+            (normalized_mcid,),
+        )
+        rows = _fetchall_dict(cur)
+        return [str(row["tag_name"]) for row in rows if row.get("tag_name")]
+
+
+def list_mcids_by_manual_tag(tag_name: str, prefix: str = "", limit: int = 25) -> list[str]:
+    normalized_tag = _normalize_tag_key(tag_name)
+    normalized_prefix = _normalize_mcid_key(prefix)
+    if not normalized_tag:
+        return []
+    with get_conn() as conn, conn.cursor(cursor_factory=RealDictCursor) as cur:
+        if normalized_prefix:
+            cur.execute(
+                """
+                SELECT mcid
+                FROM manual_tags
+                WHERE tag_name = %s
+                  AND mcid LIKE %s
+                ORDER BY mcid ASC
+                LIMIT %s
+                """,
+                (normalized_tag, f"{normalized_prefix}%", limit),
+            )
+        else:
+            cur.execute(
+                """
+                SELECT mcid
+                FROM manual_tags
+                WHERE tag_name = %s
+                ORDER BY mcid ASC
+                LIMIT %s
+                """,
+                (normalized_tag, limit),
             )
         rows = _fetchall_dict(cur)
         return [str(row["mcid"]) for row in rows if row.get("mcid")]
