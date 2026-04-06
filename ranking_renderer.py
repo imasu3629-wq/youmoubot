@@ -746,7 +746,7 @@ def render_stats_image(row: Any) -> io.BytesIO:
         username_font = _load_font(getattr(username_font, "size", 42) - 2)
     if getattr(username_font, "size", 0) > 26:
         username_font = _load_font(26)
-    draw_text_with_shadow(draw, (325, 30), player_name, username_font, (235, 235, 235))
+    draw_text_with_shadow(draw, (325, 14), player_name, username_font, (235, 235, 235))
     star = _safe_int(row.get("bedwars_star"))
     draw_star_text(draw, 115, 68, star, badge_font, symbol_font, get_prestige_style(max(star, 0)))
 
