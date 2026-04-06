@@ -498,6 +498,31 @@ def _latest_timestamp(rows: list[Any]) -> str:
     return latest.strftime("Updated: %Y-%m-%d %H:%M")
 
 
+def _build_stats_background(width: int, height: int, *, blur_radius: int = STATS_BACKGROUND_BLUR_RADIUS) -> Image.Image:
+    resolved_background_path = STATS_BACKGROUND_PATH.resolve()
+    logger.info("Stats background resolved path: %s", resolved_background_path)
+    logger.info("Stats background exists: %s", resolved_background_path.exists())
+    try:
+        background = Image.open(resolved_background_path).convert("RGBA")
+        logger.info("Stats background loaded size: %sx%s", background.width, background.height)
+        scale = max(width / background.width, height / background.height)
+        bg_size = (int(background.width * scale), int(background.height * scale))
+        background = background.resize(bg_size, Image.Resampling.LANCZOS)
+        crop_x = (background.width - width) // 2
+        crop_y = (background.height - height) // 2
+        background = background.crop((crop_x, crop_y, crop_x + width, crop_y + height))
+        if blur_radius > 0:
+            background = background.filter(ImageFilter.GaussianBlur(radius=blur_radius))
+        return background
+    except Exception as exc:
+        logger.exception(
+            "Failed loading stats background from %s: %s",
+            resolved_background_path,
+            exc,
+        )
+        return Image.new("RGBA", (width, height), (20, 24, 32, 255))
+
+
 def render_ranking_image(rows: list[Any], metric: str, *, show_title: bool = True, rank_start: int = 1) -> io.BytesIO:
     if metric not in RANKING_META:
         raise RankingRenderError("Unsupported ranking metric")
@@ -505,8 +530,10 @@ def render_ranking_image(rows: list[Any], metric: str, *, show_title: bool = Tru
     width = 1000
     top_padding = 120 if show_title else 70
     height = top_padding + (len(rows) * 64) + 70
-    image = Image.new("RGBA", (width, height), (10, 10, 10, 255))
-    draw = ImageDraw.Draw(image)
+    image = _build_stats_background(width, height)
+    overlay = Image.new("RGBA", (width, height), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(overlay, "RGBA")
+    draw.rectangle((0, 0, width, height), fill=(0, 0, 0, 92))
 
     title_font = _load_font(28)
     header_font = _load_font(18)
@@ -533,7 +560,7 @@ def render_ranking_image(rows: list[Any], metric: str, *, show_title: bool = Tru
         draw.text((40, y + 8), f"#{rank_start + idx - 1}", font=body_font, fill="#FFFFFF")
 
         head = _load_head_image(row["head_image_base64"]).resize((32, 32), Image.Resampling.NEAREST)
-        image.paste(head, (90, y + 5), head)
+        overlay.paste(head, (90, y + 5), head)
 
         star = _safe_int(row["bedwars_star"])
         draw_star_text(
@@ -556,7 +583,7 @@ def render_ranking_image(rows: list[Any], metric: str, *, show_title: bool = Tru
             name_bbox = draw.textbbox((name_x, name_y), name, font=body_font)
             name_height = name_bbox[3] - name_bbox[1]
             icon_y = name_y + max(int((name_height - icon.height) / 2), 0)
-            image.paste(icon, (name_bbox[2] + 8, icon_y), icon)
+            overlay.paste(icon, (name_bbox[2] + 8, icon_y), icon)
 
         metric_value = _extract_metric_value(row, metric)
         value_text = _format_metric_value(metric_value, meta["decimals"])
@@ -565,6 +592,7 @@ def render_ranking_image(rows: list[Any], metric: str, *, show_title: bool = Tru
     draw.text((40, height - 35), _latest_timestamp(rows), font=footer_font, fill="#AAAAAA")
 
     output = io.BytesIO()
+    image.alpha_composite(overlay)
     image.save(output, format="PNG")
     output.seek(0)
     return output
@@ -700,27 +728,7 @@ def render_stats_image(row: Any) -> io.BytesIO:
             numeric = numeric / 100.0
         return max(0.0, min(numeric, 1.0))
 
-    resolved_background_path = STATS_BACKGROUND_PATH.resolve()
-    logger.info("Stats background resolved path: %s", resolved_background_path)
-    logger.info("Stats background exists: %s", resolved_background_path.exists())
-    try:
-        background = Image.open(resolved_background_path).convert("RGBA")
-        logger.info("Stats background loaded size: %sx%s", background.width, background.height)
-        scale = max(width / background.width, height / background.height)
-        bg_size = (int(background.width * scale), int(background.height * scale))
-        background = background.resize(bg_size, Image.Resampling.LANCZOS)
-        crop_x = (background.width - width) // 2
-        crop_y = (background.height - height) // 2
-        background = background.crop((crop_x, crop_y, crop_x + width, crop_y + height))
-        background = background.filter(ImageFilter.GaussianBlur(radius=STATS_BACKGROUND_BLUR_RADIUS))
-        canvas = background
-    except Exception as exc:
-        logger.exception(
-            "Failed loading stats background from %s: %s",
-            resolved_background_path,
-            exc,
-        )
-        canvas = Image.new("RGBA", (width, height), (20, 24, 32, 255))
+    canvas = _build_stats_background(width, height)
     overlay = Image.new("RGBA", (width, height), (0, 0, 0, 0))
     draw = ImageDraw.Draw(overlay, "RGBA")
     # Keep panel readability while preserving the background details.
