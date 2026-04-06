@@ -17,6 +17,7 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 BASE_DIR_PATH = Path(__file__).resolve().parent
 TAG_ICON_DIR = BASE_DIR_PATH / "assets" / "tag_icons"
 STATS_BACKGROUND_PATH = BASE_DIR_PATH / "assets" / "Background.PNG"
+STATS_BACKGROUND_BLUR_RADIUS = 18
 TAG_ICON_FILENAME_MAP = {
     "account": "Account.PNG",
     "blatant_cheater": "Blatant_Cheater.PNG",
@@ -204,6 +205,27 @@ def _safe_float(value: Any) -> float:
         return float(value or 0)
     except (TypeError, ValueError):
         return 0.0
+
+
+def _bedwars_exp_to_next_star_progress(total_experience: Any) -> float | None:
+    try:
+        exp = max(int(total_experience), 0)
+    except (TypeError, ValueError):
+        return None
+
+    exp_in_prestige = exp % 482_000
+    level_thresholds = (500, 1_500, 3_500, 7_000)
+
+    if exp_in_prestige < level_thresholds[0]:
+        return exp_in_prestige / 500.0
+    if exp_in_prestige < level_thresholds[1]:
+        return (exp_in_prestige - level_thresholds[0]) / 1_000.0
+    if exp_in_prestige < level_thresholds[2]:
+        return (exp_in_prestige - level_thresholds[1]) / 2_000.0
+    if exp_in_prestige < level_thresholds[3]:
+        return (exp_in_prestige - level_thresholds[2]) / 3_500.0
+
+    return ((exp_in_prestige - level_thresholds[3]) % 5_000) / 5_000.0
 
 
 def _dig_value(payload: Any, paths: list[tuple[str, ...]]) -> Any:
@@ -690,7 +712,7 @@ def render_stats_image(row: Any) -> io.BytesIO:
         crop_x = (background.width - width) // 2
         crop_y = (background.height - height) // 2
         background = background.crop((crop_x, crop_y, crop_x + width, crop_y + height))
-        background = background.filter(ImageFilter.GaussianBlur(radius=14))
+        background = background.filter(ImageFilter.GaussianBlur(radius=STATS_BACKGROUND_BLUR_RADIUS))
         canvas = background
     except Exception as exc:
         logger.exception(
@@ -703,7 +725,6 @@ def render_stats_image(row: Any) -> io.BytesIO:
     draw.rectangle((0, 0, width, height), fill=(0, 0, 0, 150))
 
     title_font = _load_font(42)
-    section_font = _load_font(28)
     value_font = _load_font(32)
     body_font = _load_font(22)
     small_font = _load_font(18)
@@ -714,22 +735,26 @@ def render_stats_image(row: Any) -> io.BytesIO:
     draw_rounded_panel(draw, (20, 20, 1260, 120))
     head = _load_head_image(row.get("head_image_base64")).resize((60, 60), Image.Resampling.NEAREST)
     canvas.paste(head, (35, 35), head)
-    draw_text_with_shadow(draw, (110, 32), "Rank", body_font, (190, 195, 205))
+    draw_text_with_shadow(draw, (110, 32), "Star", body_font, (190, 195, 205))
     player_name = str(row.get("minecraft_name") or "Unknown")
-    draw_text_with_shadow(draw, (245, 34), "mcid", small_font, (190, 195, 205))
+    draw_text_with_shadow(draw, (245, 36), "mcid", _load_font(14), (190, 195, 205))
     username_font = title_font
     max_name_width = 900 - 325
-    while getattr(username_font, "size", 0) > 24 and _measure_text_width(draw, player_name, username_font) > max_name_width:
+    while getattr(username_font, "size", 0) > 20 and _measure_text_width(draw, player_name, username_font) > max_name_width:
         username_font = _load_font(getattr(username_font, "size", 42) - 2)
-    draw_text_with_shadow(draw, (325, 28), player_name, username_font, (235, 235, 235))
+    if getattr(username_font, "size", 0) > 26:
+        username_font = _load_font(26)
+    draw_text_with_shadow(draw, (325, 34), player_name, username_font, (235, 235, 235))
     star = _safe_int(row.get("bedwars_star"))
     draw_star_text(draw, 115, 68, star, badge_font, symbol_font, get_prestige_style(max(star, 0)))
 
-    xp_progress = _dig_value(bedwars_blob, [("level_progress",), ("xp_progress",), ("progress",)])
+    total_experience = _dig_value(bedwars_blob, [("Experience",), ("experience",), ("Exp",), ("exp",)])
+    xp_progress = _bedwars_exp_to_next_star_progress(total_experience)
+    if xp_progress is None:
+        xp_progress = _dig_value(bedwars_blob, [("level_progress",), ("xp_progress",), ("progress",)])
     draw_progress_bar(draw, 360, 66, 740, 18, _percent_progress(xp_progress))
     draw_text_with_shadow(draw, (350, 48), "0%", small_font, (70, 220, 255))
     draw_text_with_shadow(draw, (1110, 48), "100%", small_font, (70, 220, 255))
-    draw_text_with_shadow(draw, (1165, 28), str(max(0, star // 100)), section_font, (245, 245, 245))
     tag_icon = _load_tag_icon(display_tag_name, 48)
     if tag_icon:
         canvas.paste(tag_icon, (1200, 46), tag_icon)
@@ -777,20 +802,20 @@ def render_stats_image(row: Any) -> io.BytesIO:
         draw_centered_at(draw, center_x, value_y, value, small_font if len(value) > 9 else body_font, color)
 
     # Bottom panels
-    draw_rounded_panel(draw, (20, 500, 320, 700))
+    draw_rounded_panel(draw, (20, 500, 320, 690))
     draw_text_with_shadow(draw, (35, 515), "Winstreak", body_font, (190, 195, 205))
-    draw_centered_at(draw, 170, 625, format_number(row.get("winstreak")), value_font, (255, 195, 40))
+    draw_centered_at(draw, 170, 620, format_number(row.get("winstreak")), value_font, (255, 195, 40))
 
-    draw_rounded_panel(draw, (340, 500, 700, 700))
+    draw_rounded_panel(draw, (340, 500, 700, 690))
     draw_text_with_shadow(draw, (360, 515), "Tag", body_font, (190, 195, 205))
     urchin_title = display_tag_name or "N/A"
     tag_icon_large = _load_tag_icon(display_tag_name, 88)
     if tag_icon_large:
-        canvas.paste(tag_icon_large, (520 - (tag_icon_large.width // 2), 620 - (tag_icon_large.height // 2)), tag_icon_large)
+        canvas.paste(tag_icon_large, (520 - (tag_icon_large.width // 2), 610 - (tag_icon_large.height // 2)), tag_icon_large)
     else:
-        draw_centered_at(draw, 520, 620, urchin_title, value_font, (190, 110, 255))
+        draw_centered_at(draw, 520, 610, urchin_title, value_font, (190, 110, 255))
 
-    draw_rounded_panel(draw, (720, 500, 1260, 700))
+    draw_rounded_panel(draw, (720, 500, 1260, 690))
     draw_text_with_shadow(draw, (740, 515), "Information", body_font, (190, 195, 205))
     updated = row.get("last_updated")
     try:
@@ -798,10 +823,10 @@ def render_stats_image(row: Any) -> io.BytesIO:
         updated_text = updated_dt.strftime("%Y-%m-%d")
     except (TypeError, ValueError):
         updated_text = "N/A"
-    draw_text_with_shadow(draw, (740, 605), f"Updated: {updated_text}", small_font, (235, 235, 235))
+    draw_text_with_shadow(draw, (740, 595), f"Updated: {updated_text}", small_font, (235, 235, 235))
     source_value = str((display_tag or {}).get("source") or "")
     source_text = "Source: Urchin" if source_value.lower() == "urchin" else "Source: Manual"
-    draw_text_with_shadow(draw, (740, 640), source_text, small_font, (190, 195, 205))
+    draw_text_with_shadow(draw, (740, 630), source_text, small_font, (190, 195, 205))
 
     output = io.BytesIO()
     canvas.save(output, format="PNG")
