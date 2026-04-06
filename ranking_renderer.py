@@ -8,9 +8,7 @@ from pathlib import Path
 from typing import Any
 
 import requests
-from PIL import Image, ImageDraw, ImageFont
-
-from urchin_tags import format_urchin_added_on_date
+from PIL import Image, ImageDraw, ImageFilter, ImageFont
 
 REQUEST_TIMEOUT = 10
 HEAD_CACHE_DIR = os.path.join("cache", "skins")
@@ -18,6 +16,7 @@ SESSION_PROFILE_URL = "https://sessionserver.mojang.com/session/minecraft/profil
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 BASE_DIR_PATH = Path(__file__).resolve().parent
 TAG_ICON_DIR = BASE_DIR_PATH / "assets" / "tag_icons"
+STATS_BACKGROUND_PATH = BASE_DIR_PATH / "assets" / "Background.PNG"
 TAG_ICON_FILENAME_MAP = {
     "account": "Account.PNG",
     "blatant_cheater": "Blatant_Cheater.PNG",
@@ -207,6 +206,41 @@ def _safe_float(value: Any) -> float:
         return 0.0
 
 
+def _dig_value(payload: Any, paths: list[tuple[str, ...]]) -> Any:
+    if not isinstance(payload, dict):
+        return None
+    for path in paths:
+        current = payload
+        found = True
+        for key in path:
+            if not isinstance(current, dict) or key not in current:
+                found = False
+                break
+            current = current[key]
+        if found and current is not None:
+            return current
+    return None
+
+
+def format_number(value: Any) -> str:
+    if value is None:
+        return "N/A"
+    try:
+        return f"{int(value):,}"
+    except (TypeError, ValueError):
+        return "N/A"
+
+
+def calculate_bblr(beds_broken: int | None, beds_lost: int | None) -> float:
+    broken = _safe_int(beds_broken)
+    lost = _safe_int(beds_lost)
+    if lost > 0:
+        return broken / lost
+    if broken > 0:
+        return float(broken)
+    return 0.0
+
+
 def _load_font(size: int) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
     if os.path.exists(FONT_PATH):
         try:
@@ -362,9 +396,7 @@ def _extract_metric_value(row: Any, metric: str) -> float:
     if metric == "star":
         return float(_safe_int(row["bedwars_star"]))
     if metric == "bblr":
-        beds_broken = _safe_int(row.get("beds_broken"))
-        beds_lost = _safe_int(row.get("beds_lost"))
-        return float(beds_broken) / max(beds_lost, 1)
+        return calculate_bblr(row.get("beds_broken"), row.get("beds_lost"))
     if metric in ("fkdr", "wlr", "kdr"):
         return _safe_float(row[metric])
     return float(_safe_int(row[metric]))
@@ -517,106 +549,191 @@ def render_ranking_image(rows: list[Any], metric: str, *, show_title: bool = Tru
 
 
 def render_stats_image(row: Any) -> io.BytesIO:
-    width = 720
+    width, height = 1280, 720
     selected_tag = row.get("urchin_tag")
-    has_urchin_tag = isinstance(selected_tag, dict)
     display_tag = _get_display_tag_payload(row)
     display_tag_name = (display_tag or {}).get("tag")
-    display_tag_source = (display_tag or {}).get("source")
+    raw_stats = row.get("raw_flashlight_json") if isinstance(row.get("raw_flashlight_json"), dict) else {}
+    bedwars_blob = _dig_value(
+        raw_stats,
+        [("stats", "bedwars"), ("stats", "Bedwars"), ("player", "stats", "Bedwars"), ("playerData", "stats", "bedwars")],
+    ) or {}
 
-    title_font = _load_font(28)
-    body_font = _load_font(24)
-    badge_font = _load_font(32)
-    symbol_font = _load_symbol_font(32)
+    def draw_text_with_shadow(
+        d: ImageDraw.ImageDraw,
+        position: tuple[int, int],
+        text: str,
+        font: ImageFont.ImageFont,
+        fill: tuple[int, int, int] = (235, 235, 235),
+        align: str = "left",
+    ) -> None:
+        d.text((position[0] + 2, position[1] + 2), text, font=font, fill=(0, 0, 0, 140), align=align)
+        d.text(position, text, font=font, fill=fill, align=align)
+
+    def draw_rounded_panel(d: ImageDraw.ImageDraw, rect: tuple[int, int, int, int]) -> None:
+        d.rounded_rectangle(rect, radius=22, fill=(8, 12, 18, 190), outline=(120, 140, 170, 80), width=2)
+
+    def draw_stat_box(d: ImageDraw.ImageDraw, rect: tuple[int, int, int, int]) -> None:
+        d.rounded_rectangle(rect, radius=14, fill=(18, 22, 30, 185), outline=(100, 120, 150, 60), width=1)
+
+    def paste_centered_image(base: Image.Image, image_to_paste: Image.Image, rect: tuple[int, int, int, int]) -> None:
+        rx1, ry1, rx2, ry2 = rect
+        rw = rx2 - rx1
+        rh = ry2 - ry1
+        scale = min(rw / image_to_paste.width, rh / image_to_paste.height)
+        new_size = (max(1, int(image_to_paste.width * scale)), max(1, int(image_to_paste.height * scale)))
+        resized = image_to_paste.resize(new_size, Image.Resampling.LANCZOS)
+        px = rx1 + (rw - resized.width) // 2
+        py = ry1 + (rh - resized.height) // 2
+        base.paste(resized, (px, py), resized if resized.mode == "RGBA" else None)
+
+    def draw_progress_bar(d: ImageDraw.ImageDraw, x: int, y: int, w: int, h: int, progress: float) -> None:
+        d.rounded_rectangle((x, y, x + w, y + h), radius=9, fill=(28, 34, 44, 205), outline=(120, 140, 170, 70), width=1)
+        inner_w = max(0, min(w - 4, int((w - 4) * max(0.0, min(progress, 1.0)))))
+        if inner_w > 0:
+            d.rounded_rectangle((x + 2, y + 2, x + 2 + inner_w, y + h - 2), radius=7, fill=(70, 220, 255, 220))
+
+    def safe_ratio_text(value: Any) -> str:
+        if value is None:
+            return "N/A"
+        try:
+            return f"{float(value):.2f}"
+        except (TypeError, ValueError):
+            return "N/A"
+
+    def get_stat(paths: list[tuple[str, ...]], fallback_key: str | None = None) -> Any:
+        value = _dig_value(bedwars_blob, paths)
+        if value is None and fallback_key:
+            value = row.get(fallback_key)
+        return value
+
+    def _percent_progress(value: Any) -> float:
+        try:
+            numeric = float(value or 0)
+        except (TypeError, ValueError):
+            numeric = 0.0
+        if numeric > 1:
+            numeric = numeric / 100.0
+        return max(0.0, min(numeric, 1.0))
+
+    canvas = Image.new("RGBA", (width, height), (0, 0, 0, 255))
+    if STATS_BACKGROUND_PATH.exists():
+        background = Image.open(STATS_BACKGROUND_PATH).convert("RGBA")
+        scale = max(width / background.width, height / background.height)
+        bg_size = (int(background.width * scale), int(background.height * scale))
+        background = background.resize(bg_size, Image.Resampling.LANCZOS)
+        crop_x = (background.width - width) // 2
+        crop_y = (background.height - height) // 2
+        background = background.crop((crop_x, crop_y, crop_x + width, crop_y + height))
+        background = background.filter(ImageFilter.GaussianBlur(radius=6))
+        canvas.paste(background, (0, 0))
+    draw = ImageDraw.Draw(canvas, "RGBA")
+    draw.rectangle((0, 0, width, height), fill=(0, 0, 0, 130))
+
+    title_font = _load_font(30)
+    large_font = _load_font(28)
+    body_font = _load_font(22)
     small_font = _load_font(16)
-    tag_font = _load_font(20)
+    badge_font = _load_font(30)
+    symbol_font = _load_symbol_font(30)
 
-    measurement_image = Image.new("RGBA", (width, 1200), (10, 10, 10, 255))
-    measurement_draw = ImageDraw.Draw(measurement_image)
+    # Header panel
+    draw_rounded_panel(draw, (20, 20, 1260, 120))
+    head = _load_head_image(row.get("head_image_base64")).resize((64, 64), Image.Resampling.NEAREST)
+    canvas.paste(head, (36, 34), head)
+    draw_text_with_shadow(draw, (120, 38), "Rank", body_font, (190, 195, 205))
+    player_name = str(row.get("minecraft_name") or "Unknown")
+    draw_text_with_shadow(draw, (250, 34), player_name, title_font)
+    star = _safe_int(row.get("bedwars_star"))
+    draw_star_text(draw, 120, 72, star, badge_font, symbol_font, get_prestige_style(max(star, 0)))
+    draw_text_with_shadow(draw, (220, 73), f"Prestige {format_number(star)}", small_font, (255, 195, 40))
 
-    line_spacing = 8
-    label_x = 170
-    metric_start_y = 195
-    metric_line_height = (measurement_draw.textbbox((0, 0), "FKDR: 0.00", font=body_font)[3] + 8)
-    tag_start_y = metric_start_y + (metric_line_height * 3) + 14
+    xp_progress = _dig_value(bedwars_blob, [("level_progress",), ("xp_progress",), ("progress",)])
+    draw_progress_bar(draw, 340, 74, 760, 18, _percent_progress(xp_progress))
+    draw_text_with_shadow(draw, (300, 68), "0%", small_font, (70, 220, 255))
+    draw_text_with_shadow(draw, (1115, 68), "100%", small_font, (70, 220, 255))
+    tag_icon = _load_tag_icon(display_tag_name, 48)
+    if tag_icon:
+        canvas.paste(tag_icon, (1130, 36), tag_icon)
 
-    reason = str((selected_tag or {}).get("reason") or "").strip() if has_urchin_tag else ""
-    added_on = format_urchin_added_on_date(str((selected_tag or {}).get("added_on") or "")) if has_urchin_tag else "Unknown"
-    reason_text = reason or "Unknown"
+    # Left skin panel
+    draw_rounded_panel(draw, (20, 140, 320, 530))
+    skin_rect = (45, 185, 295, 470)
+    skin_img = _load_head_image(row.get("head_image_base64")).resize((250, 250), Image.Resampling.NEAREST)
+    paste_centered_image(canvas, skin_img, skin_rect)
+    overall_text = "Overall"
+    overall_bbox = draw.textbbox((0, 0), overall_text, font=body_font)
+    draw_text_with_shadow(draw, (20 + (300 - (overall_bbox[2] - overall_bbox[0])) // 2, 485), overall_text, body_font)
 
-    reason_full_lines: list[str] = []
-    tag_line_height = measurement_draw.textbbox((0, 0), "Reason: Unknown", font=tag_font)[3] + line_spacing
-    show_manual_tag_text = bool(display_tag_name) and _normalize_raw_tag_to_key(display_tag_name) != "zero"
-    if has_urchin_tag and display_tag_source == "urchin":
-        reason_prefix = "Reason: "
-        reason_indent = " " * len(reason_prefix)
-        reason_max_width = width - label_x - 45
-        reason_body_max_width = max(
-            reason_max_width - _measure_text_width(measurement_draw, reason_prefix, tag_font),
-            1,
-        )
-        reason_lines = _wrap_text_by_width(measurement_draw, reason_text, tag_font, reason_body_max_width)
-        if not reason_lines:
-            reason_lines = ["Unknown"]
-        reason_full_lines = [f'{reason_prefix}"{reason_lines[0]}']
-        reason_full_lines.extend(f"{reason_indent}{line}" for line in reason_lines[1:])
-        reason_full_lines[-1] = f'{reason_full_lines[-1]}"'
-        reason_block_height = len(reason_full_lines) * tag_line_height
-        stats_bottom_y = tag_start_y + reason_block_height + (tag_line_height * 2)
-    elif show_manual_tag_text:
-        stats_bottom_y = tag_start_y + (tag_line_height * 2)
-    else:
-        stats_bottom_y = tag_start_y + tag_line_height
-    content_bottom_y = max(stats_bottom_y + 20, 310)
-    height = content_bottom_y + 55
+    # Ratios panel
+    draw_rounded_panel(draw, (340, 140, 1260, 270))
+    draw_text_with_shadow(draw, (365, 155), "Ratios", body_font)
+    ratio_specs = [
+        ("FKDR", 360, safe_ratio_text(row.get("fkdr")), (190, 110, 255)),
+        ("WLR", 580, safe_ratio_text(row.get("wlr")), (190, 110, 255)),
+        ("KDR", 800, safe_ratio_text(row.get("kdr")), (255, 195, 40)),
+        ("BBLR", 1020, f"{calculate_bblr(get_stat([('beds_broken',), ('beds_broken_bedwars',)], 'beds_broken'), get_stat([('beds_lost',), ('beds_lost_bedwars',)], 'beds_lost')):.2f}", (190, 110, 255)),
+    ]
+    for label, box_x, value, color in ratio_specs:
+        draw_stat_box(draw, (box_x, 185, box_x + 205, 247))
+        lb = draw.textbbox((0, 0), label, font=small_font)
+        vb = draw.textbbox((0, 0), value, font=body_font)
+        draw_text_with_shadow(draw, (box_x + (205 - (lb[2] - lb[0])) // 2, 198), label, small_font, (190, 195, 205))
+        draw_text_with_shadow(draw, (box_x + (205 - (vb[2] - vb[0])) // 2, 220), value, body_font, color)
 
-    image = Image.new("RGBA", (width, height), (10, 10, 10, 255))
-    draw = ImageDraw.Draw(image)
+    # Main combat panel
+    draw_rounded_panel(draw, (340, 285, 1260, 455))
+    draw_text_with_shadow(draw, (365, 299), "Combat Stats", body_font)
+    combat_specs = [
+        ("Wins", "wins", (92, 255, 110), 360, 305),
+        ("Losses", "losses", (255, 95, 95), 580, 305),
+        ("Finals", "final_kills", (92, 255, 110), 800, 305),
+        ("Final Deaths", "final_deaths", (255, 95, 95), 1020, 305),
+        ("Beds Broken", "beds_broken", (92, 255, 110), 360, 381),
+        ("Beds Lost", "beds_lost", (255, 95, 95), 580, 381),
+        ("Kills", "kills", (92, 255, 110), 800, 381),
+        ("Deaths", "deaths", (255, 95, 95), 1020, 381),
+    ]
+    for label, key, color, x, y in combat_specs:
+        draw_stat_box(draw, (x, y, x + 205, y + 58))
+        value = format_number(get_stat([(key,), (f"{key}_bedwars",)], key))
+        draw_text_with_shadow(draw, (x + 12, y + 10), label, small_font, (190, 195, 205))
+        vb = draw.textbbox((0, 0), value, font=body_font)
+        draw_text_with_shadow(draw, (x + 205 - (vb[2] - vb[0]) - 12, y + 26), value, body_font, color)
 
-    draw.rounded_rectangle((20, 20, width - 20, height - 20), radius=12, fill=(18, 18, 18, 255))
-    draw.text((40, 35), "Bedwars Stats", font=title_font, fill="#FFFFFF")
+    # Resource panel
+    draw_rounded_panel(draw, (340, 470, 1260, 560))
+    resource_specs = [
+        ("Iron", 340, (215, 220, 230), [("iron_resources_collected_bedwars",), ("iron_resources_collected",)]),
+        ("Gold", 570, (255, 180, 40), [("gold_resources_collected_bedwars",), ("gold_resources_collected",)]),
+        ("Diamonds", 800, (70, 220, 255), [("diamond_resources_collected_bedwars",), ("diamond_resources_collected",)]),
+        ("Emeralds", 1030, (80, 255, 120), [("emerald_resources_collected_bedwars",), ("emerald_resources_collected",)]),
+    ]
+    for label, x, color, paths in resource_specs:
+        value = format_number(get_stat(paths))
+        draw_text_with_shadow(draw, (x + 70, 495), "◆", body_font, color)
+        draw_text_with_shadow(draw, (x + 32, 515), label, small_font, (190, 195, 205))
+        draw_text_with_shadow(draw, (x + 32, 538), value, body_font, color)
 
-    head = _load_head_image(row["head_image_base64"]).resize((96, 96), Image.Resampling.NEAREST)
-    image.paste(head, (45, 95), head)
+    # Bottom panels
+    draw_rounded_panel(draw, (20, 580, 320, 700))
+    draw_text_with_shadow(draw, (40, 602), "Winstreak", body_font, (190, 195, 205))
+    draw_text_with_shadow(draw, (40, 640), format_number(row.get("winstreak")), large_font, (255, 195, 40))
 
-    name = str(row["minecraft_name"] or "Unknown")
-    player_label = f"MCID: {name}"
-    player_x = 170
-    player_y = 100
-    draw.text((player_x, player_y), player_label, font=body_font, fill="#FFFFFF")
-    icon = _load_tag_icon(display_tag_name, 24)
-    if icon:
-        name_bbox = draw.textbbox((player_x, player_y), player_label, font=body_font)
-        name_height = name_bbox[3] - name_bbox[1]
-        icon_y = player_y + max(int((name_height - icon.height) / 2), 0)
-        image.paste(icon, (name_bbox[2] + 8, icon_y), icon)
+    draw_rounded_panel(draw, (340, 580, 700, 700))
+    draw_text_with_shadow(draw, (360, 602), "Urchin Tag", body_font, (190, 195, 205))
+    urchin_title = display_tag_name or "N/A"
+    draw_text_with_shadow(draw, (360, 640), urchin_title, large_font, (190, 110, 255))
 
-    star = _safe_int(row["bedwars_star"])
-    draw_star_text(
-        draw,
-        170,
-        145,
-        star,
-        badge_font,
-        symbol_font,
-        get_prestige_style(max(star, 0)),
-    )
-    draw.text((170, metric_start_y), f"FKDR: {_safe_float(row['fkdr']):.2f}", font=body_font, fill="#55FFFF")
-    draw.text((170, metric_start_y + metric_line_height), f"WLR: {_safe_float(row.get('wlr')):.2f}", font=body_font, fill="#55FFFF")
-    draw.text((170, metric_start_y + metric_line_height * 2), f"BBLR: {_safe_float(row.get('bblr')):.2f}", font=body_font, fill="#55FFFF")
-
-    if has_urchin_tag and display_tag_source == "urchin":
-        reason_y = tag_start_y
-        for line in reason_full_lines:
-            draw.text((label_x, reason_y), line, font=tag_font, fill="#FFFFFF")
-            reason_y += tag_line_height
-        draw.text((label_x, reason_y), f"Added On: {added_on}", font=tag_font, fill="#FFFFFF")
-    elif show_manual_tag_text:
-        draw.text((label_x, tag_start_y), f"Tag: {display_tag_name}", font=tag_font, fill="#FFFFFF")
-
-    draw.text((40, height - 35), f"Last Updated: {row['last_updated'] or 'N/A'}", font=small_font, fill="#AAAAAA")
+    draw_rounded_panel(draw, (720, 580, 1260, 700))
+    draw_text_with_shadow(draw, (740, 602), "Information", body_font, (190, 195, 205))
+    updated = row.get("last_updated")
+    updated_text = str(updated) if updated else "N/A"
+    draw_text_with_shadow(draw, (740, 636), f"Updated: {updated_text}", small_font, (235, 235, 235))
+    source_text = "Tag Source: Urchin" if isinstance(selected_tag, dict) else "Tag Source: Manual/None"
+    draw_text_with_shadow(draw, (740, 660), source_text, small_font, (190, 195, 205))
 
     output = io.BytesIO()
-    image.save(output, format="PNG")
+    canvas.save(output, format="PNG")
     output.seek(0)
     return output
