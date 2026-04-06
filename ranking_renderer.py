@@ -721,7 +721,8 @@ def render_stats_image(row: Any) -> io.BytesIO:
             exc,
         )
         canvas = Image.new("RGBA", (width, height), (20, 24, 32, 255))
-    draw = ImageDraw.Draw(canvas, "RGBA")
+    overlay = Image.new("RGBA", (width, height), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(overlay, "RGBA")
     # Keep panel readability while preserving the background details.
     draw.rectangle((0, 0, width, height), fill=(0, 0, 0, 80))
 
@@ -735,10 +736,10 @@ def render_stats_image(row: Any) -> io.BytesIO:
     # Header panel
     draw_rounded_panel(draw, (20, 20, 1260, 120))
     head = _load_head_image(row.get("head_image_base64")).resize((60, 60), Image.Resampling.NEAREST)
-    canvas.paste(head, (35, 35), head)
+    overlay.paste(head, (35, 35), head)
     draw_text_with_shadow(draw, (110, 32), "Star", body_font, (190, 195, 205))
     player_name = str(row.get("minecraft_name") or "Unknown")
-    draw_text_with_shadow(draw, (245, 34), "mcid", _load_font(14), (190, 195, 205))
+    draw_text_with_shadow(draw, (245, 31), "mcid", _load_font(14), (190, 195, 205))
     username_font = title_font
     max_name_width = 900 - 325
     while getattr(username_font, "size", 0) > 20 and _measure_text_width(draw, player_name, username_font) > max_name_width:
@@ -753,18 +754,18 @@ def render_stats_image(row: Any) -> io.BytesIO:
     xp_progress = _bedwars_exp_to_next_star_progress(total_experience)
     if xp_progress is None:
         xp_progress = _dig_value(bedwars_blob, [("level_progress",), ("xp_progress",), ("progress",)])
-    draw_progress_bar(draw, 360, 72, 740, 18, _percent_progress(xp_progress))
+    draw_progress_bar(draw, 360, 78, 740, 18, _percent_progress(xp_progress))
     draw_text_with_shadow(draw, (350, 54), "0%", small_font, (70, 220, 255))
     draw_text_with_shadow(draw, (1110, 54), "100%", small_font, (70, 220, 255))
     tag_icon = _load_tag_icon(display_tag_name, 48)
     if tag_icon:
-        canvas.paste(tag_icon, (1200, 46), tag_icon)
+        overlay.paste(tag_icon, (1200, 46), tag_icon)
 
     # Left skin panel
     draw_rounded_panel(draw, (20, 140, 320, 490))
     skin_rect = (45, 200, 295, 450)
     skin_img = _load_head_image(row.get("head_image_base64")).resize((250, 250), Image.Resampling.NEAREST)
-    paste_centered_image(canvas, skin_img, skin_rect)
+    paste_centered_image(overlay, skin_img, skin_rect)
 
     # Ratios panel
     draw_rounded_panel(draw, (340, 140, 1260, 270))
@@ -812,7 +813,7 @@ def render_stats_image(row: Any) -> io.BytesIO:
     urchin_title = display_tag_name or "N/A"
     tag_icon_large = _load_tag_icon(display_tag_name, 88)
     if tag_icon_large:
-        canvas.paste(tag_icon_large, (520 - (tag_icon_large.width // 2), 610 - (tag_icon_large.height // 2)), tag_icon_large)
+        overlay.paste(tag_icon_large, (520 - (tag_icon_large.width // 2), 610 - (tag_icon_large.height // 2)), tag_icon_large)
     else:
         draw_centered_at(draw, 520, 610, urchin_title, value_font, (190, 110, 255))
 
@@ -829,7 +830,8 @@ def render_stats_image(row: Any) -> io.BytesIO:
     source_text = "Source: Urchin" if source_value.lower() == "urchin" else "Source: Manual"
     draw_text_with_shadow(draw, (740, 630), source_text, small_font, (190, 195, 205))
 
+    final_canvas = Image.alpha_composite(canvas, overlay)
     output = io.BytesIO()
-    canvas.save(output, format="PNG")
+    final_canvas.save(output, format="PNG")
     output.seek(0)
     return output
