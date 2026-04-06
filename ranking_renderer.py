@@ -559,22 +559,85 @@ def render_stats_image(row: Any) -> io.BytesIO:
         [("stats", "bedwars"), ("stats", "Bedwars"), ("player", "stats", "Bedwars"), ("playerData", "stats", "bedwars")],
     ) or {}
 
+    font_y_offsets = {
+        16: -1,
+        22: -2,
+        28: -2,
+        30: -2,
+    }
+
+    def _font_y_offset(font: ImageFont.ImageFont) -> int:
+        return font_y_offsets.get(getattr(font, "size", 0), 0)
+
+    def _text_size(
+        d: ImageDraw.ImageDraw,
+        text: str,
+        font: ImageFont.ImageFont,
+    ) -> tuple[int, int, tuple[int, int, int, int]]:
+        bbox = d.textbbox((0, 0), text, font=font)
+        return bbox[2] - bbox[0], bbox[3] - bbox[1], bbox
+
     def draw_text_with_shadow(
         d: ImageDraw.ImageDraw,
         position: tuple[int, int],
         text: str,
         font: ImageFont.ImageFont,
         fill: tuple[int, int, int] = (235, 235, 235),
-        align: str = "left",
     ) -> None:
-        d.text((position[0] + 2, position[1] + 2), text, font=font, fill=(0, 0, 0, 140), align=align)
-        d.text(position, text, font=font, fill=fill, align=align)
+        x, y = position
+        y += _font_y_offset(font)
+        d.text((x + 2, y + 2), text, font=font, fill=(0, 0, 0, 140))
+        d.text((x, y), text, font=font, fill=fill)
+
+    def draw_centered_text(
+        d: ImageDraw.ImageDraw,
+        rect: tuple[int, int, int, int],
+        text: str,
+        font: ImageFont.ImageFont,
+        fill: tuple[int, int, int] = (235, 235, 235),
+        y_offset: int = 0,
+    ) -> None:
+        rx1, ry1, rx2, ry2 = rect
+        text_w, text_h, _ = _text_size(d, text, font)
+        x = rx1 + (rx2 - rx1 - text_w) // 2
+        y = ry1 + (ry2 - ry1 - text_h) // 2 + y_offset
+        draw_text_with_shadow(d, (x, y), text, font, fill)
+
+    def draw_left_aligned_text(
+        d: ImageDraw.ImageDraw,
+        rect: tuple[int, int, int, int],
+        text: str,
+        font: ImageFont.ImageFont,
+        fill: tuple[int, int, int] = (235, 235, 235),
+        left_padding: int = 0,
+        y_offset: int = 0,
+    ) -> None:
+        rx1, ry1, _, ry2 = rect
+        _, text_h, _ = _text_size(d, text, font)
+        x = rx1 + left_padding
+        y = ry1 + (ry2 - ry1 - text_h) // 2 + y_offset
+        draw_text_with_shadow(d, (x, y), text, font, fill)
 
     def draw_rounded_panel(d: ImageDraw.ImageDraw, rect: tuple[int, int, int, int]) -> None:
         d.rounded_rectangle(rect, radius=22, fill=(8, 12, 18, 190), outline=(120, 140, 170, 80), width=2)
 
     def draw_stat_box(d: ImageDraw.ImageDraw, rect: tuple[int, int, int, int]) -> None:
         d.rounded_rectangle(rect, radius=14, fill=(18, 22, 30, 185), outline=(100, 120, 150, 60), width=1)
+
+    def draw_label_value_box(
+        d: ImageDraw.ImageDraw,
+        rect: tuple[int, int, int, int],
+        label: str,
+        value: str,
+        value_color: tuple[int, int, int] = (235, 235, 235),
+    ) -> None:
+        x1, y1, x2, y2 = rect
+        draw_stat_box(d, rect)
+        box_h = y2 - y1
+        label_rect = (x1 + 8, y1 + 6, x2 - 8, y1 + int(box_h * 0.45))
+        value_rect = (x1 + 8, y1 + int(box_h * 0.38), x2 - 8, y2 - 6)
+        draw_centered_text(d, label_rect, label, small_font, (190, 195, 205))
+        draw_centered_text(d, value_rect, value, body_font, value_color)
 
     def paste_centered_image(base: Image.Image, image_to_paste: Image.Image, rect: tuple[int, int, int, int]) -> None:
         rx1, ry1, rx2, ry2 = rect
@@ -625,10 +688,10 @@ def render_stats_image(row: Any) -> io.BytesIO:
         crop_x = (background.width - width) // 2
         crop_y = (background.height - height) // 2
         background = background.crop((crop_x, crop_y, crop_x + width, crop_y + height))
-        background = background.filter(ImageFilter.GaussianBlur(radius=6))
+        background = background.filter(ImageFilter.GaussianBlur(radius=14))
         canvas.paste(background, (0, 0))
     draw = ImageDraw.Draw(canvas, "RGBA")
-    draw.rectangle((0, 0, width, height), fill=(0, 0, 0, 130))
+    draw.rectangle((0, 0, width, height), fill=(0, 0, 0, 155))
 
     title_font = _load_font(30)
     large_font = _load_font(28)
@@ -641,17 +704,18 @@ def render_stats_image(row: Any) -> io.BytesIO:
     draw_rounded_panel(draw, (20, 20, 1260, 120))
     head = _load_head_image(row.get("head_image_base64")).resize((64, 64), Image.Resampling.NEAREST)
     canvas.paste(head, (36, 34), head)
-    draw_text_with_shadow(draw, (120, 38), "Rank", body_font, (190, 195, 205))
+    draw_left_aligned_text(draw, (120, 34, 220, 62), "Rank", body_font, (190, 195, 205))
     player_name = str(row.get("minecraft_name") or "Unknown")
-    draw_text_with_shadow(draw, (250, 34), player_name, title_font)
+    draw_left_aligned_text(draw, (250, 34, 820, 66), "mcid", small_font, (190, 195, 205))
+    draw_left_aligned_text(draw, (310, 34, 1000, 70), player_name, title_font, (235, 235, 235))
     star = _safe_int(row.get("bedwars_star"))
     draw_star_text(draw, 120, 72, star, badge_font, symbol_font, get_prestige_style(max(star, 0)))
-    draw_text_with_shadow(draw, (220, 73), f"Prestige {format_number(star)}", small_font, (255, 195, 40))
+    draw_left_aligned_text(draw, (220, 72, 520, 108), f"Prestige {format_number(star)}", small_font, (255, 195, 40))
 
     xp_progress = _dig_value(bedwars_blob, [("level_progress",), ("xp_progress",), ("progress",)])
     draw_progress_bar(draw, 340, 74, 760, 18, _percent_progress(xp_progress))
-    draw_text_with_shadow(draw, (300, 68), "0%", small_font, (70, 220, 255))
-    draw_text_with_shadow(draw, (1115, 68), "100%", small_font, (70, 220, 255))
+    draw_centered_text(draw, (292, 66, 338, 92), "0%", small_font, (70, 220, 255))
+    draw_centered_text(draw, (1105, 66, 1160, 92), "100%", small_font, (70, 220, 255))
     tag_icon = _load_tag_icon(display_tag_name, 48)
     if tag_icon:
         canvas.paste(tag_icon, (1130, 36), tag_icon)
@@ -661,13 +725,11 @@ def render_stats_image(row: Any) -> io.BytesIO:
     skin_rect = (45, 185, 295, 470)
     skin_img = _load_head_image(row.get("head_image_base64")).resize((250, 250), Image.Resampling.NEAREST)
     paste_centered_image(canvas, skin_img, skin_rect)
-    overall_text = "Overall"
-    overall_bbox = draw.textbbox((0, 0), overall_text, font=body_font)
-    draw_text_with_shadow(draw, (20 + (300 - (overall_bbox[2] - overall_bbox[0])) // 2, 485), overall_text, body_font)
+    draw_centered_text(draw, (30, 480, 310, 518), "Overall", body_font)
 
     # Ratios panel
     draw_rounded_panel(draw, (340, 140, 1260, 270))
-    draw_text_with_shadow(draw, (365, 155), "Ratios", body_font)
+    draw_left_aligned_text(draw, (360, 150, 520, 182), "Ratios", body_font)
     ratio_specs = [
         ("FKDR", 360, safe_ratio_text(row.get("fkdr")), (190, 110, 255)),
         ("WLR", 580, safe_ratio_text(row.get("wlr")), (190, 110, 255)),
@@ -675,15 +737,11 @@ def render_stats_image(row: Any) -> io.BytesIO:
         ("BBLR", 1020, f"{calculate_bblr(get_stat([('beds_broken',), ('beds_broken_bedwars',)], 'beds_broken'), get_stat([('beds_lost',), ('beds_lost_bedwars',)], 'beds_lost')):.2f}", (190, 110, 255)),
     ]
     for label, box_x, value, color in ratio_specs:
-        draw_stat_box(draw, (box_x, 185, box_x + 205, 247))
-        lb = draw.textbbox((0, 0), label, font=small_font)
-        vb = draw.textbbox((0, 0), value, font=body_font)
-        draw_text_with_shadow(draw, (box_x + (205 - (lb[2] - lb[0])) // 2, 198), label, small_font, (190, 195, 205))
-        draw_text_with_shadow(draw, (box_x + (205 - (vb[2] - vb[0])) // 2, 220), value, body_font, color)
+        draw_label_value_box(draw, (box_x, 185, box_x + 205, 247), label, value, color)
 
     # Main combat panel
     draw_rounded_panel(draw, (340, 285, 1260, 455))
-    draw_text_with_shadow(draw, (365, 299), "Combat Stats", body_font)
+    draw_left_aligned_text(draw, (360, 295, 640, 330), "Combat Stats", body_font)
     combat_specs = [
         ("Wins", "wins", (92, 255, 110), 360, 305),
         ("Losses", "losses", (255, 95, 95), 580, 305),
@@ -695,43 +753,26 @@ def render_stats_image(row: Any) -> io.BytesIO:
         ("Deaths", "deaths", (255, 95, 95), 1020, 381),
     ]
     for label, key, color, x, y in combat_specs:
-        draw_stat_box(draw, (x, y, x + 205, y + 58))
         value = format_number(get_stat([(key,), (f"{key}_bedwars",)], key))
-        draw_text_with_shadow(draw, (x + 12, y + 10), label, small_font, (190, 195, 205))
-        vb = draw.textbbox((0, 0), value, font=body_font)
-        draw_text_with_shadow(draw, (x + 205 - (vb[2] - vb[0]) - 12, y + 26), value, body_font, color)
-
-    # Resource panel
-    draw_rounded_panel(draw, (340, 470, 1260, 560))
-    resource_specs = [
-        ("Iron", 340, (215, 220, 230), [("iron_resources_collected_bedwars",), ("iron_resources_collected",)]),
-        ("Gold", 570, (255, 180, 40), [("gold_resources_collected_bedwars",), ("gold_resources_collected",)]),
-        ("Diamonds", 800, (70, 220, 255), [("diamond_resources_collected_bedwars",), ("diamond_resources_collected",)]),
-        ("Emeralds", 1030, (80, 255, 120), [("emerald_resources_collected_bedwars",), ("emerald_resources_collected",)]),
-    ]
-    for label, x, color, paths in resource_specs:
-        value = format_number(get_stat(paths))
-        draw_text_with_shadow(draw, (x + 70, 495), "◆", body_font, color)
-        draw_text_with_shadow(draw, (x + 32, 515), label, small_font, (190, 195, 205))
-        draw_text_with_shadow(draw, (x + 32, 538), value, body_font, color)
+        draw_label_value_box(draw, (x, y, x + 205, y + 58), label, value, color)
 
     # Bottom panels
-    draw_rounded_panel(draw, (20, 580, 320, 700))
-    draw_text_with_shadow(draw, (40, 602), "Winstreak", body_font, (190, 195, 205))
-    draw_text_with_shadow(draw, (40, 640), format_number(row.get("winstreak")), large_font, (255, 195, 40))
+    draw_rounded_panel(draw, (20, 470, 320, 700))
+    draw_left_aligned_text(draw, (32, 490, 308, 530), "Winstreak", body_font, (190, 195, 205))
+    draw_centered_text(draw, (32, 560, 308, 680), format_number(row.get("winstreak")), large_font, (255, 195, 40))
 
-    draw_rounded_panel(draw, (340, 580, 700, 700))
-    draw_text_with_shadow(draw, (360, 602), "Urchin Tag", body_font, (190, 195, 205))
+    draw_rounded_panel(draw, (340, 470, 700, 700))
+    draw_left_aligned_text(draw, (352, 490, 688, 530), "Tag", body_font, (190, 195, 205))
     urchin_title = display_tag_name or "N/A"
-    draw_text_with_shadow(draw, (360, 640), urchin_title, large_font, (190, 110, 255))
+    draw_centered_text(draw, (352, 560, 688, 680), urchin_title, large_font, (190, 110, 255))
 
-    draw_rounded_panel(draw, (720, 580, 1260, 700))
-    draw_text_with_shadow(draw, (740, 602), "Information", body_font, (190, 195, 205))
+    draw_rounded_panel(draw, (720, 470, 1260, 700))
+    draw_left_aligned_text(draw, (732, 490, 1248, 530), "Information", body_font, (190, 195, 205))
     updated = row.get("last_updated")
     updated_text = str(updated) if updated else "N/A"
-    draw_text_with_shadow(draw, (740, 636), f"Updated: {updated_text}", small_font, (235, 235, 235))
+    draw_left_aligned_text(draw, (740, 590, 1245, 640), f"Updated: {updated_text}", small_font, (235, 235, 235))
     source_text = "Tag Source: Urchin" if isinstance(selected_tag, dict) else "Tag Source: Manual/None"
-    draw_text_with_shadow(draw, (740, 660), source_text, small_font, (190, 195, 205))
+    draw_left_aligned_text(draw, (740, 630, 1245, 680), source_text, small_font, (190, 195, 205))
 
     output = io.BytesIO()
     canvas.save(output, format="PNG")
