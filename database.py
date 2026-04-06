@@ -703,6 +703,15 @@ def get_player_stats_by_uuid(minecraft_uuid: str):
                 ps.minecraft_uuid,
                 ps.minecraft_name,
                 ps.bedwars_star,
+                ps.wins,
+                ps.losses,
+                ps.final_kills,
+                ps.final_deaths,
+                ps.beds_broken,
+                ps.beds_lost,
+                ps.kills,
+                ps.deaths,
+                ps.winstreak,
                 ps.fkdr,
                 ps.wlr,
                 ps.kdr,
@@ -734,7 +743,13 @@ def get_top_player_stats(metric: str, limit: int = 10):
         raise ValueError("Invalid ranking metric")
 
     if metric == "bblr":
-        order_expression = "COALESCE(ps.beds_broken::double precision / NULLIF(ps.beds_lost, 0), ps.beds_broken::double precision, 0)"
+        order_expression = """
+            CASE
+                WHEN COALESCE(ps.beds_lost, 0) > 0 THEN ps.beds_broken::double precision / ps.beds_lost
+                WHEN COALESCE(ps.beds_broken, 0) > 0 THEN ps.beds_broken::double precision
+                ELSE 0
+            END
+        """
     else:
         order_expression = f"COALESCE(ps.{order_column}, 0)"
 
