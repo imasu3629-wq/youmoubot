@@ -546,6 +546,7 @@ def render_stats_image(row: Any) -> io.BytesIO:
 
     reason_full_lines: list[str] = []
     tag_line_height = measurement_draw.textbbox((0, 0), "Reason: Unknown", font=tag_font)[3] + line_spacing
+    show_manual_tag_text = bool(display_tag_name) and _normalize_raw_tag_to_key(display_tag_name) != "zero"
     if has_urchin_tag and display_tag_source == "urchin":
         reason_prefix = "Reason: "
         reason_indent = " " * len(reason_prefix)
@@ -562,7 +563,7 @@ def render_stats_image(row: Any) -> io.BytesIO:
         reason_full_lines[-1] = f'{reason_full_lines[-1]}"'
         reason_block_height = len(reason_full_lines) * tag_line_height
         stats_bottom_y = tag_start_y + reason_block_height + (tag_line_height * 2)
-    elif display_tag_name:
+    elif show_manual_tag_text:
         stats_bottom_y = tag_start_y + (tag_line_height * 2)
     else:
         stats_bottom_y = tag_start_y + tag_line_height
@@ -610,7 +611,7 @@ def render_stats_image(row: Any) -> io.BytesIO:
             draw.text((label_x, reason_y), line, font=tag_font, fill="#FFFFFF")
             reason_y += tag_line_height
         draw.text((label_x, reason_y), f"Added On: {added_on}", font=tag_font, fill="#FFFFFF")
-    elif display_tag_name:
+    elif show_manual_tag_text:
         draw.text((label_x, tag_start_y), f"Tag: {display_tag_name}", font=tag_font, fill="#FFFFFF")
 
     draw.text((40, height - 35), f"Last Updated: {row['last_updated'] or 'N/A'}", font=small_font, fill="#AAAAAA")
