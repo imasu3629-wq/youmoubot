@@ -543,10 +543,10 @@ def render_stats_image(row: Any) -> io.BytesIO:
     if reason_full_lines:
         reason_full_lines[-1] = f'{reason_full_lines[-1]}"'
 
-    tag_line_height = measurement_draw.textbbox((0, 0), "Tag: confirmed_cheater", font=tag_font)[3] + line_spacing
+    tag_line_height = measurement_draw.textbbox((0, 0), "Reason: Unknown", font=tag_font)[3] + line_spacing
     reason_block_height = len(reason_full_lines) * tag_line_height
-    stats_bottom_y = tag_start_y + tag_line_height + reason_block_height + (tag_line_height * 2)
-    content_bottom_y = max(stats_bottom_y + 20, 330)
+    stats_bottom_y = tag_start_y + reason_block_height + (tag_line_height * 2)
+    content_bottom_y = max(stats_bottom_y + 20, 310)
     height = content_bottom_y + 55
 
     image = Image.new("RGBA", (width, height), (10, 10, 10, 255))
@@ -559,13 +559,19 @@ def render_stats_image(row: Any) -> io.BytesIO:
     image.paste(head, (45, 95), head)
 
     name = str(row["minecraft_name"] or "Unknown")
-    player_label = f"Player: {name}"
+    player_label = f"MCID: {name}"
     player_x = 170
     player_y = 100
     draw.text((player_x, player_y), player_label, font=body_font, fill="#FFFFFF")
+    icon = _load_tag_icon(raw_tag, 24)
+    if icon:
+        name_bbox = draw.textbbox((player_x, player_y), player_label, font=body_font)
+        name_height = name_bbox[3] - name_bbox[1]
+        icon_y = player_y + max(int((name_height - icon.height) / 2), 0)
+        image.paste(icon, (name_bbox[2] + 8, icon_y), icon)
 
     star = _safe_int(row["bedwars_star"])
-    star_end_x = draw_star_text(
+    draw_star_text(
         draw,
         170,
         145,
@@ -574,22 +580,15 @@ def render_stats_image(row: Any) -> io.BytesIO:
         symbol_font,
         get_prestige_style(max(star, 0)),
     )
-    icon = _load_tag_icon(raw_tag, 28)
-    if icon:
-        icon_y = 145 + max(int((38 - icon.height) / 2), 0)
-        image.paste(icon, (star_end_x + 10, icon_y), icon)
-
     draw.text((170, metric_start_y), f"FKDR: {_safe_float(row['fkdr']):.2f}", font=body_font, fill="#55FFFF")
     draw.text((170, metric_start_y + metric_line_height), f"WLR: {_safe_float(row.get('wlr')):.2f}", font=body_font, fill="#55FFFF")
-    draw.text((170, metric_start_y + metric_line_height * 2), f"KDR: {_safe_float(row.get('kdr')):.2f}", font=body_font, fill="#55FFFF")
+    draw.text((170, metric_start_y + metric_line_height * 2), f"BBLR: {_safe_float(row.get('bblr')):.2f}", font=body_font, fill="#55FFFF")
 
-    tag_value = raw_tag or "None"
-    draw.text((label_x, tag_start_y), f"Tag: {tag_value}", font=tag_font, fill="#FFFFFF")
-    reason_y = tag_start_y + tag_line_height
+    reason_y = tag_start_y
     for line in reason_full_lines:
         draw.text((label_x, reason_y), line, font=tag_font, fill="#FFFFFF")
         reason_y += tag_line_height
-    draw.text((label_x, reason_y), f"Date: {added_on if has_tag else 'Unknown'}", font=tag_font, fill="#FFFFFF")
+    draw.text((label_x, reason_y), f"Added On: {added_on if has_tag else 'Unknown'}", font=tag_font, fill="#FFFFFF")
 
     draw.text((40, height - 35), f"Last Updated: {row['last_updated'] or 'N/A'}", font=small_font, fill="#AAAAAA")
 
