@@ -17,7 +17,7 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 BASE_DIR_PATH = Path(__file__).resolve().parent
 TAG_ICON_DIR = BASE_DIR_PATH / "assets" / "tag_icons"
 STATS_BACKGROUND_PATH = BASE_DIR_PATH / "assets" / "Background.PNG"
-STATS_BACKGROUND_BLUR_RADIUS = 18
+STATS_BACKGROUND_BLUR_RADIUS = 8
 TAG_ICON_FILENAME_MAP = {
     "account": "Account.PNG",
     "blatant_cheater": "Blatant_Cheater.PNG",
@@ -722,7 +722,8 @@ def render_stats_image(row: Any) -> io.BytesIO:
         )
         canvas = Image.new("RGBA", (width, height), (20, 24, 32, 255))
     draw = ImageDraw.Draw(canvas, "RGBA")
-    draw.rectangle((0, 0, width, height), fill=(0, 0, 0, 150))
+    # Keep panel readability while preserving the background details.
+    draw.rectangle((0, 0, width, height), fill=(0, 0, 0, 80))
 
     title_font = _load_font(42)
     value_font = _load_font(32)
@@ -737,7 +738,7 @@ def render_stats_image(row: Any) -> io.BytesIO:
     canvas.paste(head, (35, 35), head)
     draw_text_with_shadow(draw, (110, 32), "Star", body_font, (190, 195, 205))
     player_name = str(row.get("minecraft_name") or "Unknown")
-    draw_text_with_shadow(draw, (245, 36), "mcid", _load_font(14), (190, 195, 205))
+    draw_text_with_shadow(draw, (245, 34), "mcid", _load_font(14), (190, 195, 205))
     username_font = title_font
     max_name_width = 900 - 325
     while getattr(username_font, "size", 0) > 20 and _measure_text_width(draw, player_name, username_font) > max_name_width:
@@ -752,9 +753,9 @@ def render_stats_image(row: Any) -> io.BytesIO:
     xp_progress = _bedwars_exp_to_next_star_progress(total_experience)
     if xp_progress is None:
         xp_progress = _dig_value(bedwars_blob, [("level_progress",), ("xp_progress",), ("progress",)])
-    draw_progress_bar(draw, 360, 66, 740, 18, _percent_progress(xp_progress))
-    draw_text_with_shadow(draw, (350, 48), "0%", small_font, (70, 220, 255))
-    draw_text_with_shadow(draw, (1110, 48), "100%", small_font, (70, 220, 255))
+    draw_progress_bar(draw, 360, 72, 740, 18, _percent_progress(xp_progress))
+    draw_text_with_shadow(draw, (350, 54), "0%", small_font, (70, 220, 255))
+    draw_text_with_shadow(draw, (1110, 54), "100%", small_font, (70, 220, 255))
     tag_icon = _load_tag_icon(display_tag_name, 48)
     if tag_icon:
         canvas.paste(tag_icon, (1200, 46), tag_icon)
