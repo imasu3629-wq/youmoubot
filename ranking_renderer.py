@@ -550,7 +550,6 @@ def render_ranking_image(rows: list[Any], metric: str, *, show_title: bool = Tru
 
 def render_stats_image(row: Any) -> io.BytesIO:
     width, height = 1280, 720
-    selected_tag = row.get("urchin_tag")
     display_tag = _get_display_tag_payload(row)
     display_tag_name = (display_tag or {}).get("tag")
     raw_stats = row.get("raw_flashlight_json") if isinstance(row.get("raw_flashlight_json"), dict) else {}
@@ -618,26 +617,26 @@ def render_stats_image(row: Any) -> io.BytesIO:
         y = ry1 + (ry2 - ry1 - text_h) // 2 + y_offset
         draw_text_with_shadow(d, (x, y), text, font, fill)
 
+    panel_radius = 18
+    panel_fill = (8, 12, 18, 190)
+    panel_outline = (135, 155, 180, 100)
+
     def draw_rounded_panel(d: ImageDraw.ImageDraw, rect: tuple[int, int, int, int]) -> None:
-        d.rounded_rectangle(rect, radius=22, fill=(8, 12, 18, 190), outline=(120, 140, 170, 80), width=2)
+        d.rounded_rectangle(rect, radius=panel_radius, fill=panel_fill, outline=panel_outline, width=2)
 
     def draw_stat_box(d: ImageDraw.ImageDraw, rect: tuple[int, int, int, int]) -> None:
         d.rounded_rectangle(rect, radius=14, fill=(18, 22, 30, 185), outline=(100, 120, 150, 60), width=1)
 
-    def draw_label_value_box(
+    def draw_centered_at(
         d: ImageDraw.ImageDraw,
-        rect: tuple[int, int, int, int],
-        label: str,
-        value: str,
-        value_color: tuple[int, int, int] = (235, 235, 235),
+        center_x: int,
+        y: int,
+        text: str,
+        font: ImageFont.ImageFont,
+        fill: tuple[int, int, int] = (235, 235, 235),
     ) -> None:
-        x1, y1, x2, y2 = rect
-        draw_stat_box(d, rect)
-        box_h = y2 - y1
-        label_rect = (x1 + 8, y1 + 6, x2 - 8, y1 + int(box_h * 0.45))
-        value_rect = (x1 + 8, y1 + int(box_h * 0.38), x2 - 8, y2 - 6)
-        draw_centered_text(d, label_rect, label, small_font, (190, 195, 205))
-        draw_centered_text(d, value_rect, value, body_font, value_color)
+        text_w, _, _ = _text_size(d, text, font)
+        draw_text_with_shadow(d, (center_x - (text_w // 2), y), text, font, fill)
 
     def paste_centered_image(base: Image.Image, image_to_paste: Image.Image, rect: tuple[int, int, int, int]) -> None:
         rx1, ry1, rx2, ry2 = rect
@@ -679,9 +678,12 @@ def render_stats_image(row: Any) -> io.BytesIO:
             numeric = numeric / 100.0
         return max(0.0, min(numeric, 1.0))
 
-    canvas = Image.new("RGBA", (width, height), (0, 0, 0, 255))
-    if STATS_BACKGROUND_PATH.exists():
-        background = Image.open(STATS_BACKGROUND_PATH).convert("RGBA")
+    resolved_background_path = STATS_BACKGROUND_PATH.resolve()
+    logger.info("Stats background resolved path: %s", resolved_background_path)
+    logger.info("Stats background exists: %s", resolved_background_path.exists())
+    try:
+        background = Image.open(resolved_background_path).convert("RGBA")
+        logger.info("Stats background loaded size: %sx%s", background.width, background.height)
         scale = max(width / background.width, height / background.height)
         bg_size = (int(background.width * scale), int(background.height * scale))
         background = background.resize(bg_size, Image.Resampling.LANCZOS)
@@ -689,90 +691,117 @@ def render_stats_image(row: Any) -> io.BytesIO:
         crop_y = (background.height - height) // 2
         background = background.crop((crop_x, crop_y, crop_x + width, crop_y + height))
         background = background.filter(ImageFilter.GaussianBlur(radius=14))
-        canvas.paste(background, (0, 0))
+        canvas = background
+    except Exception as exc:
+        logger.exception(
+            "Failed loading stats background from %s: %s",
+            resolved_background_path,
+            exc,
+        )
+        canvas = Image.new("RGBA", (width, height), (20, 24, 32, 255))
     draw = ImageDraw.Draw(canvas, "RGBA")
-    draw.rectangle((0, 0, width, height), fill=(0, 0, 0, 155))
+    draw.rectangle((0, 0, width, height), fill=(0, 0, 0, 150))
 
-    title_font = _load_font(30)
-    large_font = _load_font(28)
+    title_font = _load_font(42)
+    section_font = _load_font(28)
+    value_font = _load_font(32)
     body_font = _load_font(22)
-    small_font = _load_font(16)
+    small_font = _load_font(18)
     badge_font = _load_font(30)
     symbol_font = _load_symbol_font(30)
 
     # Header panel
     draw_rounded_panel(draw, (20, 20, 1260, 120))
-    head = _load_head_image(row.get("head_image_base64")).resize((64, 64), Image.Resampling.NEAREST)
-    canvas.paste(head, (36, 34), head)
-    draw_left_aligned_text(draw, (120, 34, 220, 62), "Rank", body_font, (190, 195, 205))
+    head = _load_head_image(row.get("head_image_base64")).resize((60, 60), Image.Resampling.NEAREST)
+    canvas.paste(head, (35, 35), head)
+    draw_text_with_shadow(draw, (110, 32), "Rank", body_font, (190, 195, 205))
     player_name = str(row.get("minecraft_name") or "Unknown")
-    draw_left_aligned_text(draw, (250, 34, 820, 66), "mcid", small_font, (190, 195, 205))
-    draw_left_aligned_text(draw, (310, 34, 1000, 70), player_name, title_font, (235, 235, 235))
+    draw_text_with_shadow(draw, (245, 34), "mcid", small_font, (190, 195, 205))
+    username_font = title_font
+    max_name_width = 900 - 325
+    while getattr(username_font, "size", 0) > 24 and _measure_text_width(draw, player_name, username_font) > max_name_width:
+        username_font = _load_font(getattr(username_font, "size", 42) - 2)
+    draw_text_with_shadow(draw, (325, 28), player_name, username_font, (235, 235, 235))
     star = _safe_int(row.get("bedwars_star"))
-    draw_star_text(draw, 120, 72, star, badge_font, symbol_font, get_prestige_style(max(star, 0)))
-    draw_left_aligned_text(draw, (220, 72, 520, 108), f"Prestige {format_number(star)}", small_font, (255, 195, 40))
+    draw_star_text(draw, 115, 68, star, badge_font, symbol_font, get_prestige_style(max(star, 0)))
 
     xp_progress = _dig_value(bedwars_blob, [("level_progress",), ("xp_progress",), ("progress",)])
-    draw_progress_bar(draw, 340, 74, 760, 18, _percent_progress(xp_progress))
-    draw_centered_text(draw, (292, 66, 338, 92), "0%", small_font, (70, 220, 255))
-    draw_centered_text(draw, (1105, 66, 1160, 92), "100%", small_font, (70, 220, 255))
+    draw_progress_bar(draw, 360, 66, 740, 18, _percent_progress(xp_progress))
+    draw_text_with_shadow(draw, (350, 48), "0%", small_font, (70, 220, 255))
+    draw_text_with_shadow(draw, (1110, 48), "100%", small_font, (70, 220, 255))
+    draw_text_with_shadow(draw, (1165, 28), str(max(0, star // 100)), section_font, (245, 245, 245))
     tag_icon = _load_tag_icon(display_tag_name, 48)
     if tag_icon:
-        canvas.paste(tag_icon, (1130, 36), tag_icon)
+        canvas.paste(tag_icon, (1200, 46), tag_icon)
 
     # Left skin panel
-    draw_rounded_panel(draw, (20, 140, 320, 530))
-    skin_rect = (45, 185, 295, 470)
+    draw_rounded_panel(draw, (20, 140, 320, 490))
+    skin_rect = (45, 200, 295, 450)
     skin_img = _load_head_image(row.get("head_image_base64")).resize((250, 250), Image.Resampling.NEAREST)
     paste_centered_image(canvas, skin_img, skin_rect)
-    draw_centered_text(draw, (30, 480, 310, 518), "Overall", body_font)
 
     # Ratios panel
     draw_rounded_panel(draw, (340, 140, 1260, 270))
-    draw_left_aligned_text(draw, (360, 150, 520, 182), "Ratios", body_font)
+    draw_text_with_shadow(draw, (360, 152), "Ratios", body_font)
     ratio_specs = [
         ("FKDR", 360, safe_ratio_text(row.get("fkdr")), (190, 110, 255)),
         ("WLR", 580, safe_ratio_text(row.get("wlr")), (190, 110, 255)),
         ("KDR", 800, safe_ratio_text(row.get("kdr")), (255, 195, 40)),
         ("BBLR", 1020, f"{calculate_bblr(get_stat([('beds_broken',), ('beds_broken_bedwars',)], 'beds_broken'), get_stat([('beds_lost',), ('beds_lost_bedwars',)], 'beds_lost')):.2f}", (190, 110, 255)),
     ]
-    for label, box_x, value, color in ratio_specs:
-        draw_label_value_box(draw, (box_x, 185, box_x + 205, 247), label, value, color)
+    ratio_centers = [462, 682, 902, 1122]
+    for idx, (label, box_x, value, color) in enumerate(ratio_specs):
+        draw_stat_box(draw, (box_x, 185, box_x + 205, 247))
+        draw_centered_at(draw, ratio_centers[idx], 197, label, small_font, (190, 195, 205))
+        draw_centered_at(draw, ratio_centers[idx], 222, value, body_font, color)
 
-    # Main combat panel
+    # Career stats panel
     draw_rounded_panel(draw, (340, 285, 1260, 455))
-    draw_left_aligned_text(draw, (360, 295, 640, 330), "Combat Stats", body_font)
+    draw_text_with_shadow(draw, (360, 297), "Career Stats", body_font)
     combat_specs = [
-        ("Wins", "wins", (92, 255, 110), 360, 305),
-        ("Losses", "losses", (255, 95, 95), 580, 305),
-        ("Finals", "final_kills", (92, 255, 110), 800, 305),
-        ("Final Deaths", "final_deaths", (255, 95, 95), 1020, 305),
-        ("Beds Broken", "beds_broken", (92, 255, 110), 360, 381),
-        ("Beds Lost", "beds_lost", (255, 95, 95), 580, 381),
-        ("Kills", "kills", (92, 255, 110), 800, 381),
-        ("Deaths", "deaths", (255, 95, 95), 1020, 381),
+        ("Wins", "wins", (92, 255, 110), 360, 320, 332, 354),
+        ("Losses", "losses", (255, 95, 95), 580, 320, 332, 354),
+        ("Finals", "final_kills", (92, 255, 110), 800, 320, 332, 354),
+        ("Final Deaths", "final_deaths", (255, 95, 95), 1020, 320, 332, 354),
+        ("Beds Broken", "beds_broken", (92, 255, 110), 360, 395, 407, 429),
+        ("Beds Lost", "beds_lost", (255, 95, 95), 580, 395, 407, 429),
+        ("Kills", "kills", (92, 255, 110), 800, 395, 407, 429),
+        ("Deaths", "deaths", (255, 95, 95), 1020, 395, 407, 429),
     ]
-    for label, key, color, x, y in combat_specs:
+    center_by_x = {360: 462, 580: 682, 800: 902, 1020: 1122}
+    for label, key, color, x, y, label_y, value_y in combat_specs:
         value = format_number(get_stat([(key,), (f"{key}_bedwars",)], key))
-        draw_label_value_box(draw, (x, y, x + 205, y + 58), label, value, color)
+        draw_stat_box(draw, (x, y, x + 205, y + 58))
+        center_x = center_by_x[x]
+        draw_centered_at(draw, center_x, label_y, label, small_font, (190, 195, 205))
+        draw_centered_at(draw, center_x, value_y, value, small_font if len(value) > 9 else body_font, color)
 
     # Bottom panels
-    draw_rounded_panel(draw, (20, 470, 320, 700))
-    draw_left_aligned_text(draw, (32, 490, 308, 530), "Winstreak", body_font, (190, 195, 205))
-    draw_centered_text(draw, (32, 560, 308, 680), format_number(row.get("winstreak")), large_font, (255, 195, 40))
+    draw_rounded_panel(draw, (20, 500, 320, 700))
+    draw_text_with_shadow(draw, (35, 515), "Winstreak", body_font, (190, 195, 205))
+    draw_centered_at(draw, 170, 625, format_number(row.get("winstreak")), value_font, (255, 195, 40))
 
-    draw_rounded_panel(draw, (340, 470, 700, 700))
-    draw_left_aligned_text(draw, (352, 490, 688, 530), "Tag", body_font, (190, 195, 205))
+    draw_rounded_panel(draw, (340, 500, 700, 700))
+    draw_text_with_shadow(draw, (360, 515), "Tag", body_font, (190, 195, 205))
     urchin_title = display_tag_name or "N/A"
-    draw_centered_text(draw, (352, 560, 688, 680), urchin_title, large_font, (190, 110, 255))
+    tag_icon_large = _load_tag_icon(display_tag_name, 88)
+    if tag_icon_large:
+        canvas.paste(tag_icon_large, (520 - (tag_icon_large.width // 2), 620 - (tag_icon_large.height // 2)), tag_icon_large)
+    else:
+        draw_centered_at(draw, 520, 620, urchin_title, value_font, (190, 110, 255))
 
-    draw_rounded_panel(draw, (720, 470, 1260, 700))
-    draw_left_aligned_text(draw, (732, 490, 1248, 530), "Information", body_font, (190, 195, 205))
+    draw_rounded_panel(draw, (720, 500, 1260, 700))
+    draw_text_with_shadow(draw, (740, 515), "Information", body_font, (190, 195, 205))
     updated = row.get("last_updated")
-    updated_text = str(updated) if updated else "N/A"
-    draw_left_aligned_text(draw, (740, 590, 1245, 640), f"Updated: {updated_text}", small_font, (235, 235, 235))
-    source_text = "Tag Source: Urchin" if isinstance(selected_tag, dict) else "Tag Source: Manual/None"
-    draw_left_aligned_text(draw, (740, 630, 1245, 680), source_text, small_font, (190, 195, 205))
+    try:
+        updated_dt = datetime.fromisoformat(str(updated).replace("Z", ""))
+        updated_text = updated_dt.strftime("%Y-%m-%d")
+    except (TypeError, ValueError):
+        updated_text = "N/A"
+    draw_text_with_shadow(draw, (740, 605), f"Updated: {updated_text}", small_font, (235, 235, 235))
+    source_value = str((display_tag or {}).get("source") or "")
+    source_text = "Source: Urchin" if source_value.lower() == "urchin" else "Source: Manual"
+    draw_text_with_shadow(draw, (740, 640), source_text, small_font, (190, 195, 205))
 
     output = io.BytesIO()
     canvas.save(output, format="PNG")
