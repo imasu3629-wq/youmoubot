@@ -739,7 +739,7 @@ def render_stats_image(row: Any) -> io.BytesIO:
     overlay.paste(head, (35, 35), head)
     draw_text_with_shadow(draw, (110, 32), "Star", body_font, (190, 195, 205))
     player_name = str(row.get("minecraft_name") or "Unknown")
-    draw_text_with_shadow(draw, (245, 31), "mcid", _load_font(14), (190, 195, 205))
+    draw_text_with_shadow(draw, (245, 26), "mcid", _load_font(14), (190, 195, 205))
     username_font = title_font
     max_name_width = 900 - 325
     while getattr(username_font, "size", 0) > 20 and _measure_text_width(draw, player_name, username_font) > max_name_width:
