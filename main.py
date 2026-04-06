@@ -60,7 +60,8 @@ HYPIXEL_PLAYER_URL = "https://api.hypixel.net/v2/player"
 FLASHLIGHT_PLAYERDATA_URL = "https://flashlight.prismoverlay.com/v1/playerdata"
 MOJANG_PROFILE_URL = "https://api.mojang.com/users/profiles/minecraft/{mcid}"
 SESSION_PROFILE_URL = "https://sessionserver.mojang.com/session/minecraft/profile/{uuid}"
-AUTHORIZED_USERS = [1278574483195559977]
+ADMIN_GUILD_ID = 1343197242533871676
+ADMIN_ROLE_ID = 1490306531940368506
 DAILY_UPDATE_TIME = time(hour=3, minute=0, tzinfo=ZoneInfo("Asia/Tokyo"))
 UPDATE_ALL_DELAY_SECONDS = 1.0
 RANKING_GUILD_ID = 1343197242533871676
@@ -116,6 +117,25 @@ class PlayerDataFetchError(Exception):
     def __init__(self, message: str):
         super().__init__(message)
         self.message = message
+
+
+class AdminPermissionError(app_commands.CheckFailure):
+    pass
+
+
+def admin_only():
+    async def predicate(interaction: discord.Interaction) -> bool:
+        if interaction.guild is None:
+            raise AdminPermissionError("❌ This command cannot be used in DMs.")
+        if interaction.guild.id != ADMIN_GUILD_ID:
+            raise AdminPermissionError("❌ This command can only be used in the designated guild.")
+        if not isinstance(interaction.user, discord.Member):
+            raise AdminPermissionError("❌ Could not validate your server membership.")
+        if not any(role.id == ADMIN_ROLE_ID for role in interaction.user.roles):
+            raise AdminPermissionError("❌ You do not have permission to use this command.")
+        return True
+
+    return app_commands.check(predicate)
 
 
 
@@ -561,10 +581,6 @@ def register_verified_account(discord_user: discord.abc.User, mcid: str):
     }
 
 
-def is_admin(user_id: int) -> bool:
-    return user_id in AUTHORIZED_USERS
-
-
 def _chunk_rows(rows: list[dict], size: int) -> list[list[dict]]:
     return [rows[i:i + size] for i in range(0, len(rows), size)]
 
@@ -891,11 +907,9 @@ async def whoami(interaction: discord.Interaction):
 
 
 @tree.command(name="lookup", description="登録済みMCIDを確認します（管理者用）")
+@admin_only()
 async def lookup(interaction: discord.Interaction, mcid: str):
     await interaction.response.defer(ephemeral=True)
-    if not is_admin(interaction.user.id):
-        await interaction.followup.send("❌ You do not have permission to use this command.", ephemeral=True)
-        return
 
     try:
         profile = fetch_player_profile(mcid)
@@ -927,11 +941,9 @@ async def lookup(interaction: discord.Interaction, mcid: str):
 
 @tree.command(name="resetverify", description="登録済みMCIDをリセットします（管理者用）")
 @app_commands.describe(mcid="Minecraft username")
+@admin_only()
 async def resetverify(interaction: discord.Interaction, mcid: str):
     await interaction.response.defer(ephemeral=True)
-    if not is_admin(interaction.user.id):
-        await interaction.followup.send("❌ You do not have permission to use this command.", ephemeral=True)
-        return
 
     try:
         profile = fetch_player_profile(mcid)
@@ -954,11 +966,9 @@ async def resetverify(interaction: discord.Interaction, mcid: str):
 
 
 @tree.command(name="add", description="管理者がMCIDを強制登録します")
+@admin_only()
 async def add(interaction: discord.Interaction, mcid: str):
     await interaction.response.defer(ephemeral=True)
-    if not is_admin(interaction.user.id):
-        await interaction.followup.send("❌ You do not have permission to use this command.", ephemeral=True)
-        return
 
     try:
         result = admin_force_register_mcid(mcid)
@@ -986,11 +996,9 @@ async def add(interaction: discord.Interaction, mcid: str):
 
 
 @tree.command(name="delete", description="管理者が登録済みMCIDを削除します")
+@admin_only()
 async def delete(interaction: discord.Interaction, mcid: str):
     await interaction.response.defer(ephemeral=True)
-    if not is_admin(interaction.user.id):
-        await interaction.followup.send("❌ You do not have permission to use this command.", ephemeral=True)
-        return
 
     try:
         profile = fetch_player_profile(mcid)
@@ -1019,11 +1027,9 @@ async def delete(interaction: discord.Interaction, mcid: str):
 @tree.command(name="kaku", description="Urchinタグ表示を非表示にします（管理者用）")
 @app_commands.describe(mcid="Minecraft username")
 @app_commands.autocomplete(mcid=registered_mcid_autocomplete)
+@admin_only()
 async def kaku(interaction: discord.Interaction, mcid: str):
     await interaction.response.defer(ephemeral=True)
-    if not is_admin(interaction.user.id):
-        await interaction.followup.send("❌ You do not have permission to use this command.", ephemeral=True)
-        return
 
     registered = get_registered_player_by_mcid(mcid)
     if not registered:
@@ -1038,11 +1044,9 @@ async def kaku(interaction: discord.Interaction, mcid: str):
 
 
 @tree.command(name="kakulist", description="Urchinタグ非表示MCID一覧を表示します（管理者用）")
+@admin_only()
 async def kakulist(interaction: discord.Interaction):
     await interaction.response.defer(ephemeral=True)
-    if not is_admin(interaction.user.id):
-        await interaction.followup.send("❌ You do not have permission to use this command.", ephemeral=True)
-        return
 
     hidden_mcids = list_hidden_urchin_mcids()
     if not hidden_mcids:
@@ -1055,11 +1059,9 @@ async def kakulist(interaction: discord.Interaction):
 @tree.command(name="kakuno", description="Urchinタグ非表示を解除します（管理者用）")
 @app_commands.describe(mcid="Minecraft username")
 @app_commands.autocomplete(mcid=registered_mcid_autocomplete)
+@admin_only()
 async def kakuno(interaction: discord.Interaction, mcid: str):
     await interaction.response.defer(ephemeral=True)
-    if not is_admin(interaction.user.id):
-        await interaction.followup.send("❌ You do not have permission to use this command.", ephemeral=True)
-        return
 
     removed = remove_hidden_urchin_mcid(mcid)
     if not removed:
@@ -1071,11 +1073,9 @@ async def kakuno(interaction: discord.Interaction, mcid: str):
 @tree.command(name="tag", description="手動カスタムタグを設定します（管理者用）")
 @app_commands.describe(tag_name="Manual custom tag", mcid="Minecraft username")
 @app_commands.autocomplete(tag_name=manual_tag_autocomplete, mcid=registered_mcid_autocomplete)
+@admin_only()
 async def tag(interaction: discord.Interaction, tag_name: str, mcid: str):
     await interaction.response.defer(ephemeral=True)
-    if not is_admin(interaction.user.id):
-        await interaction.followup.send("❌ You do not have permission to use this command.", ephemeral=True)
-        return
 
     normalized_tag = _normalize_tag_key(tag_name)
     if normalized_tag not in list_supported_manual_tags():
@@ -1102,11 +1102,9 @@ async def tag(interaction: discord.Interaction, tag_name: str, mcid: str):
 @tree.command(name="tagremove", description="手動カスタムタグを削除します（管理者用）")
 @app_commands.describe(tag_name="Manual custom tag", mcid="Minecraft username")
 @app_commands.autocomplete(tag_name=manual_tag_autocomplete, mcid=manual_tagged_mcid_autocomplete)
+@admin_only()
 async def tagremove(interaction: discord.Interaction, tag_name: str, mcid: str):
     await interaction.response.defer(ephemeral=True)
-    if not is_admin(interaction.user.id):
-        await interaction.followup.send("❌ You do not have permission to use this command.", ephemeral=True)
-        return
 
     normalized_tag = _normalize_tag_key(tag_name)
     if normalized_tag not in list_supported_manual_tags():
@@ -1129,11 +1127,9 @@ async def tagremove(interaction: discord.Interaction, tag_name: str, mcid: str):
 
 
 @tree.command(name="updateapi", description="Hypixel API キーを更新します（管理者用）")
+@admin_only()
 async def updateapi(interaction: discord.Interaction, api_key: str):
     await interaction.response.defer(ephemeral=True)
-    if not is_admin(interaction.user.id):
-        await interaction.followup.send("❌ You do not have permission to use this command.", ephemeral=True)
-        return
 
     cleaned_key = api_key.strip()
     if not cleaned_key:
@@ -1152,11 +1148,9 @@ async def updateapi(interaction: discord.Interaction, api_key: str):
         app_commands.Choice(name="all", value="all"),
     ]
 )
+@admin_only()
 async def update(interaction: discord.Interaction, target: app_commands.Choice[str]):
     await interaction.response.defer(ephemeral=True)
-    if not is_admin(interaction.user.id):
-        await interaction.followup.send("❌ You do not have permission to use this command.", ephemeral=True)
-        return
 
     try:
         if target.value != "all":
@@ -1292,11 +1286,9 @@ async def ranking(interaction: discord.Interaction, ranking_type: app_commands.C
 
 
 @tree.command(name="rankingrefresh", description="ランキング投稿を手動更新します（管理者用）")
+@admin_only()
 async def rankingrefresh(interaction: discord.Interaction):
     await interaction.response.defer(ephemeral=True)
-    if not is_admin(interaction.user.id):
-        await interaction.followup.send("❌ You do not have permission to use this command.", ephemeral=True)
-        return
 
     try:
         results = await refresh_all_rankings()
@@ -1337,6 +1329,17 @@ async def head(interaction: discord.Interaction, mcid: str):
         )
     except Exception as error:
         await interaction.followup.send(f"⚠️ エラーが発生しました: {error}")
+
+
+@tree.error
+async def on_app_command_error(interaction: discord.Interaction, error: app_commands.AppCommandError):
+    if isinstance(error, AdminPermissionError):
+        if interaction.response.is_done():
+            await interaction.followup.send(str(error), ephemeral=True)
+        else:
+            await interaction.response.send_message(str(error), ephemeral=True)
+        return
+    raise error
 
 
 keep_alive()
