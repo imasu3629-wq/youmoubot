@@ -17,6 +17,7 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 BASE_DIR_PATH = Path(__file__).resolve().parent
 TAG_ICON_DIR = BASE_DIR_PATH / "assets" / "tag_icons"
 STATS_BACKGROUND_PATH = BASE_DIR_PATH / "assets" / "Background.PNG"
+STATS_BACKGROUND_BLUR_RADIUS = 18
 TAG_ICON_FILENAME_MAP = {
     "account": "Account.PNG",
     "blatant_cheater": "Blatant_Cheater.PNG",
@@ -711,7 +712,7 @@ def render_stats_image(row: Any) -> io.BytesIO:
         crop_x = (background.width - width) // 2
         crop_y = (background.height - height) // 2
         background = background.crop((crop_x, crop_y, crop_x + width, crop_y + height))
-        background = background.filter(ImageFilter.GaussianBlur(radius=14))
+        background = background.filter(ImageFilter.GaussianBlur(radius=STATS_BACKGROUND_BLUR_RADIUS))
         canvas = background
     except Exception as exc:
         logger.exception(
