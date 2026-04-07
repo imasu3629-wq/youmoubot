@@ -304,6 +304,93 @@ def _extract_head_from_skin_bytes(skin_bytes: bytes) -> str | None:
     return base64.b64encode(output.getvalue()).decode("utf-8")
 
 
+def _extract_full_skin_preview_from_skin_bytes(skin_bytes: bytes) -> Image.Image | None:
+    try:
+        skin = Image.open(io.BytesIO(skin_bytes)).convert("RGBA")
+    except OSError:
+        return None
+
+    if skin.width < 64 or skin.height < 32:
+        return None
+
+    preview = Image.new("RGBA", (16, 32), (0, 0, 0, 0))
+
+    # Front-facing base layers.
+    head_front = skin.crop((8, 8, 16, 16))
+    body_front = skin.crop((20, 20, 28, 32))
+    right_arm_front = skin.crop((44, 20, 48, 32))
+    right_leg_front = skin.crop((4, 20, 8, 32))
+
+    # For modern (64x64) skins, these areas contain unique left arm/leg textures.
+    if skin.height >= 64:
+        left_arm_front = skin.crop((36, 52, 40, 64))
+        left_leg_front = skin.crop((20, 52, 24, 64))
+    else:
+        left_arm_front = right_arm_front.copy()
+        left_leg_front = right_leg_front.copy()
+
+    preview.paste(head_front, (4, 0), head_front)
+    preview.paste(body_front, (4, 8), body_front)
+    preview.paste(right_arm_front, (0, 8), right_arm_front)
+    preview.paste(left_arm_front, (12, 8), left_arm_front)
+    preview.paste(right_leg_front, (4, 20), right_leg_front)
+    preview.paste(left_leg_front, (8, 20), left_leg_front)
+
+    # Composite second layers (hat/jacket/sleeves/pants) when available.
+    hat_front = skin.crop((40, 8, 48, 16))
+    preview.alpha_composite(hat_front, (4, 0))
+
+    body_overlay_front = skin.crop((20, 36, 28, 48))
+    preview.alpha_composite(body_overlay_front, (4, 8))
+
+    right_arm_overlay_front = skin.crop((44, 36, 48, 48))
+    preview.alpha_composite(right_arm_overlay_front, (0, 8))
+    right_leg_overlay_front = skin.crop((4, 36, 8, 48))
+    preview.alpha_composite(right_leg_overlay_front, (4, 20))
+
+    if skin.height >= 64:
+        left_arm_overlay_front = skin.crop((52, 52, 56, 64))
+        left_leg_overlay_front = skin.crop((4, 52, 8, 64))
+    else:
+        left_arm_overlay_front = right_arm_overlay_front
+        left_leg_overlay_front = right_leg_overlay_front
+    preview.alpha_composite(left_arm_overlay_front, (12, 8))
+    preview.alpha_composite(left_leg_overlay_front, (8, 20))
+
+    upscaled = preview.resize((224, 448), Image.Resampling.NEAREST)
+    tilted = upscaled.rotate(-7, resample=Image.Resampling.NEAREST, expand=True)
+    return tilted
+
+
+def _fetch_full_skin_preview_from_uuid(uuid: str | None) -> Image.Image | None:
+    if not uuid:
+        return None
+    try:
+        session_response = requests.get(SESSION_PROFILE_URL.format(uuid=uuid), timeout=REQUEST_TIMEOUT)
+        if session_response.status_code != 200:
+            return None
+        profile = session_response.json()
+        textures_prop = next(
+            (prop for prop in profile.get("properties", []) if prop.get("name") == "textures"),
+            None,
+        )
+        if not textures_prop or not textures_prop.get("value"):
+            return None
+        decoded = base64.b64decode(textures_prop["value"]).decode("utf-8")
+        textures_payload = json.loads(decoded)
+        skin_url = (((textures_payload.get("textures") or {}).get("SKIN")) or {}).get("url")
+        if not skin_url:
+            return None
+        skin_response = requests.get(skin_url, timeout=REQUEST_TIMEOUT)
+        if skin_response.status_code != 200:
+            return None
+        return _extract_full_skin_preview_from_skin_bytes(skin_response.content)
+    except requests.RequestException:
+        return None
+    except (ValueError, json.JSONDecodeError, base64.binascii.Error):
+        return None
+
+
 def fetch_head_base64_from_uuid(uuid: str) -> str | None:
     if not uuid:
         return None
@@ -347,6 +434,13 @@ def _load_head_image(head_image_base64: str | None) -> Image.Image:
     fallback_draw = ImageDraw.Draw(fallback)
     fallback_draw.rectangle((12, 12, 52, 52), fill=(110, 110, 110, 255))
     return fallback
+
+
+def _load_skin_preview_image(row: Any) -> Image.Image:
+    skin_preview = _fetch_full_skin_preview_from_uuid(row.get("minecraft_uuid"))
+    if skin_preview:
+        return skin_preview
+    return _load_head_image(row.get("head_image_base64")).resize((250, 250), Image.Resampling.NEAREST)
 
 
 def _normalize_raw_tag_to_key(raw_tag: str | None) -> str | None:
@@ -796,7 +890,7 @@ def render_stats_image(row: Any) -> io.BytesIO:
     # Left skin panel
     draw_rounded_panel(draw, (20, 140, 320, 490))
     skin_rect = (45, 200, 295, 450)
-    skin_img = _load_head_image(row.get("head_image_base64")).resize((250, 250), Image.Resampling.NEAREST)
+    skin_img = _load_skin_preview_image(row)
     paste_centered_image(overlay, skin_img, skin_rect)
 
     # Ratios panel
