@@ -533,7 +533,9 @@ async def bwstats(interaction: discord.Interaction, mcid: str, mode: app_command
         buf = await asyncio.to_thread(
             build_stats_card, profile["name"], get_rank(player), s, CARD_MODE_LABELS[mode_key], skin
         )
-        await interaction.followup.send(file=discord.File(buf, filename="bwstats.png"))
+        alt = (f"{profile['name']} Bedwars {CARD_MODE_LABELS[mode_key]}: Star {s['star']}, FKDR {s['fkdr']}, "
+               f"WLR {s['wlr']}, Final Kills {s['final_kills']}, Wins {s['wins']}")
+        await interaction.followup.send(file=discord.File(buf, filename="bwstats.png", description=alt))
     except Exception as e:
         await interaction.followup.send(f"⚠️ エラー: {e}")
 
@@ -563,7 +565,11 @@ async def compare(interaction: discord.Interaction, mcid1: str, mcid2: str, mode
         ]
         fields = [(label.split(" ", 1)[1], key) for label, key in COMPARE_FIELDS]
         buf = await asyncio.to_thread(build_compare_card, players, fields, CARD_MODE_LABELS[mode_key], heads)
-        await interaction.followup.send(file=discord.File(buf, filename="compare.png"))
+        alt = f"{p1['name']} vs {p2['name']} ({CARD_MODE_LABELS[mode_key]}): " + ", ".join(
+            f"{label} {players[0][2][key]} / {players[1][2][key]}"
+            for label, key in fields if players[0][2][key] is not None
+        )
+        await interaction.followup.send(file=discord.File(buf, filename="compare.png", description=alt[:1000]))
     except Exception as e:
         await interaction.followup.send(f"⚠️ エラー: {e}")
 
@@ -614,7 +620,8 @@ async def leaderboard(interaction: discord.Interaction, category: app_commands.C
         _, keyword, period = LEADERBOARDS[category.value]
         title = f"{keyword.title()}  •  {period.title()}"
         buf = await asyncio.to_thread(build_leaderboard_card, title, list(names), list(heads))
-        await interaction.followup.send(file=discord.File(buf, filename="leaderboard.png"))
+        alt = f"Bedwars leaderboard {title}: " + ", ".join(f"{i + 1}. {n}" for i, n in enumerate(names))
+        await interaction.followup.send(file=discord.File(buf, filename="leaderboard.png", description=alt[:1000]))
     except Exception as e:
         await interaction.followup.send(f"⚠️ エラー: {e}")
 
