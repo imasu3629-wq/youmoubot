@@ -15,7 +15,8 @@ from database import (
     get_registered_by_discord, get_ranking_by_fkdr, get_ranking_by_star,
     delete_player
 )
-from bedwars import MODES, LEADERBOARDS, COMPARE_FIELDS, extract_bw_stats, compare_line, find_leaderboard
+from bedwars import MODES, LEADERBOARDS, COMPARE_FIELDS, extract_bw_stats, find_leaderboard
+from cards import build_stats_card, build_compare_card, build_leaderboard_card, fetch_skin, fetch_head
 
 # --- 24時間稼働設定 ---
 app = Flask('')
@@ -501,6 +502,7 @@ async def delete(interaction: discord.Interaction, mcid: str):
 # ====================
 
 MODE_CHOICES = [app_commands.Choice(name=label, value=key) for key, (label, _) in MODES.items()]
+CARD_MODE_LABELS = {"overall": "Overall", "solo": "Solo", "doubles": "Doubles", "threes": "3v3v3v3", "fours": "4v4v4v4", "4v4": "4v4"}
 LEADERBOARD_CHOICES = [app_commands.Choice(name=label, value=key) for key, (label, _, _) in LEADERBOARDS.items()]
 
 
@@ -527,25 +529,11 @@ async def bwstats(interaction: discord.Interaction, mcid: str, mode: app_command
             await interaction.followup.send(error)
             return
         s = extract_bw_stats(player, mode_key)
-        rank_label = get_rank(player)
-        name = profile["name"]
-        display_name = f"{rank_label} {name}" if rank_label else name
-
-        embed = discord.Embed(
-            title=f"{display_name} のBedwars戦績（{MODES[mode_key][0]}）",
-            color=0xe67e22,
+        skin = await asyncio.to_thread(fetch_skin, profile["uuid"])
+        buf = await asyncio.to_thread(
+            build_stats_card, profile["name"], get_rank(player), s, CARD_MODE_LABELS[mode_key], skin
         )
-        embed.set_thumbnail(url=f"https://visage.surgeplay.com/bust/128/{profile['uuid']}.png")
-        ws = "API非公開" if s["winstreak"] is None else f"{s['winstreak']:,}"
-        embed.add_field(name="⭐ Star", value=f"{s['star']:,}", inline=True)
-        embed.add_field(name="🔥 Winstreak", value=ws, inline=True)
-        embed.add_field(name="⚔️ FKDR", value=f"{s['fkdr']}\n({s['final_kills']:,} / {s['final_deaths']:,})", inline=True)
-        embed.add_field(name="🏆 WLR", value=f"{s['wlr']}\n({s['wins']:,} / {s['losses']:,})", inline=True)
-        if s["bblr"] is not None:
-            embed.add_field(name="🛏️ BBLR", value=f"{s['bblr']}\n({s['beds_broken']:,} / {s['beds_lost']:,})", inline=True)
-            embed.add_field(name="🗡️ KDR", value=f"{s['kdr']}\n({s['kills']:,} / {s['deaths']:,})", inline=True)
-        embed.set_footer(text=f"FKDR評価: {fkdr_comment(s['fkdr'])}")
-        await interaction.followup.send(embed=embed)
+        await interaction.followup.send(file=discord.File(buf, filename="bwstats.png"))
     except Exception as e:
         await interaction.followup.send(f"⚠️ エラー: {e}")
 
@@ -565,15 +553,17 @@ async def compare(interaction: discord.Interaction, mcid1: str, mcid2: str, mode
         if e1 or e2:
             await interaction.followup.send(e1 or e2)
             return
-        s1 = extract_bw_stats(pl1, mode_key)
-        s2 = extract_bw_stats(pl2, mode_key)
-        lines = [compare_line(label, s1[key], s2[key]) for label, key in COMPARE_FIELDS if s1[key] is not None]
-        embed = discord.Embed(
-            title=f"⚖️ {p1['name']} vs {p2['name']}（{MODES[mode_key][0]}）",
-            description="\n".join(lines),
-            color=0x1abc9c,
+        heads = await asyncio.gather(
+            asyncio.to_thread(fetch_head, p1["uuid"]),
+            asyncio.to_thread(fetch_head, p2["uuid"]),
         )
-        await interaction.followup.send(embed=embed)
+        players = [
+            (p1["name"], get_rank(pl1), extract_bw_stats(pl1, mode_key)),
+            (p2["name"], get_rank(pl2), extract_bw_stats(pl2, mode_key)),
+        ]
+        fields = [(label.split(" ", 1)[1], key) for label, key in COMPARE_FIELDS]
+        buf = await asyncio.to_thread(build_compare_card, players, fields, CARD_MODE_LABELS[mode_key], heads)
+        await interaction.followup.send(file=discord.File(buf, filename="compare.png"))
     except Exception as e:
         await interaction.followup.send(f"⚠️ エラー: {e}")
 
@@ -617,19 +607,14 @@ async def leaderboard(interaction: discord.Interaction, category: app_commands.C
             await interaction.followup.send("❌ このリーダーボードは現在取得できません。")
             return
         leaders = lb.get("leaders", [])[:count]
-        names = await asyncio.gather(*(asyncio.to_thread(cached_name, u) for u in leaders))
-        medals = ["🥇", "🥈", "🥉"]
-        lines = [
-            f"{medals[i] if i < 3 else f'`{i+1}.`'} **{discord.utils.escape_markdown(n)}**"
-            for i, n in enumerate(names)
-        ]
-        embed = discord.Embed(
-            title=f"🌐 Hypixel Bedwars リーダーボード — {category.name}",
-            description="\n".join(lines) if lines else "データがありません",
-            color=0xf39c12,
+        names, heads = await asyncio.gather(
+            asyncio.gather(*(asyncio.to_thread(cached_name, u) for u in leaders)),
+            asyncio.gather(*(asyncio.to_thread(fetch_head, u, 64) for u in leaders)),
         )
-        embed.set_footer(text="Data provided by Aurora (api.bordic.xyz)")
-        await interaction.followup.send(embed=embed)
+        _, keyword, period = LEADERBOARDS[category.value]
+        title = f"{keyword.title()}  •  {period.title()}"
+        buf = await asyncio.to_thread(build_leaderboard_card, title, list(names), list(heads))
+        await interaction.followup.send(file=discord.File(buf, filename="leaderboard.png"))
     except Exception as e:
         await interaction.followup.send(f"⚠️ エラー: {e}")
 
