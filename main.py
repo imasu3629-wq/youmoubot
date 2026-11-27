@@ -32,7 +32,7 @@ def keep_alive():
 
 # --- 環境変数 ---
 TOKEN = os.environ['DISCORD_TOKEN']
-current_api_key = os.environ['HYPIXEL_KEY']
+current_api_key = os.environ.get('HYPIXEL_KEY', '')
 AUTHORIZED_USERS = [1278574483195559977]
 
 intents = discord.Intents.default()
@@ -101,28 +101,32 @@ def get_rank(player_data):
 
 
 # --- Hypixel stats取得ヘルパー ---
-def hypixel_get(path: str, **params):
+AURORA_BASE = "https://api.bordic.xyz"
+
+
+def aurora_get(path: str, **params):
+    # API-Key: ws はAurora推定の総合winstreakを返させる指定（認証キーではない）
     res = requests.get(
-        f"https://api.hypixel.net/v2/{path}",
+        f"{AURORA_BASE}/{path}",
         params=params,
-        headers={"API-Key": current_api_key},
+        headers={"API-Key": "ws"},
         timeout=10,
     )
     return res.json()
 
 
 def fetch_hypixel_player(uuid: str):
-    return hypixel_get("player", uuid=uuid).get("player")
+    return aurora_get("v3/cache/hypixel", uuid=uuid).get("player")
 
 
 def fetch_hypixel_stats(uuid: str):
     p = fetch_hypixel_player(uuid)
     if not p:
         return None, None, None
-    bw = p.get("stats", {}).get("Bedwars", {})
-    star = p.get("achievements", {}).get("bedwars_level", 0)
-    fk = bw.get("final_kills_bedwars", 0)
-    fd = bw.get("final_deaths_bedwars", 1)
+    bw = (p.get("stats") or {}).get("Bedwars") or {}
+    star = (p.get("achievements") or {}).get("bedwars_level") or 0
+    fk = bw.get("final_kills_bedwars") or 0
+    fd = bw.get("final_deaths_bedwars") or 1
     fkdr = round(fk / max(fd, 1), 2)
     rank_label = get_rank(p)
     return star, fkdr, rank_label
@@ -532,15 +536,14 @@ async def bwstats(interaction: discord.Interaction, mcid: str, mode: app_command
             color=0xe67e22,
         )
         embed.set_thumbnail(url=f"https://visage.surgeplay.com/bust/128/{profile['uuid']}.png")
-        embed.add_field(name="⭐ Star", value=f"{s['star']:,}", inline=True)
-        embed.add_field(name="🎮 Games", value=f"{s['games']:,}", inline=True)
         ws = "API非公開" if s["winstreak"] is None else f"{s['winstreak']:,}"
+        embed.add_field(name="⭐ Star", value=f"{s['star']:,}", inline=True)
         embed.add_field(name="🔥 Winstreak", value=ws, inline=True)
         embed.add_field(name="⚔️ FKDR", value=f"{s['fkdr']}\n({s['final_kills']:,} / {s['final_deaths']:,})", inline=True)
         embed.add_field(name="🏆 WLR", value=f"{s['wlr']}\n({s['wins']:,} / {s['losses']:,})", inline=True)
-        embed.add_field(name="🛏️ BBLR", value=f"{s['bblr']}\n({s['beds_broken']:,} / {s['beds_lost']:,})", inline=True)
-        embed.add_field(name="🗡️ KDR", value=f"{s['kdr']}\n({s['kills']:,} / {s['deaths']:,})", inline=True)
-        embed.add_field(name="💰 Coins", value=f"{s['coins']:,}", inline=True)
+        if s["bblr"] is not None:
+            embed.add_field(name="🛏️ BBLR", value=f"{s['bblr']}\n({s['beds_broken']:,} / {s['beds_lost']:,})", inline=True)
+            embed.add_field(name="🗡️ KDR", value=f"{s['kdr']}\n({s['kills']:,} / {s['deaths']:,})", inline=True)
         embed.set_footer(text=f"FKDR評価: {fkdr_comment(s['fkdr'])}")
         await interaction.followup.send(embed=embed)
     except Exception as e:
@@ -564,7 +567,7 @@ async def compare(interaction: discord.Interaction, mcid1: str, mcid2: str, mode
             return
         s1 = extract_bw_stats(pl1, mode_key)
         s2 = extract_bw_stats(pl2, mode_key)
-        lines = [compare_line(label, s1[key], s2[key]) for label, key in COMPARE_FIELDS]
+        lines = [compare_line(label, s1[key], s2[key]) for label, key in COMPARE_FIELDS if s1[key] is not None]
         embed = discord.Embed(
             title=f"⚖️ {p1['name']} vs {p2['name']}（{MODES[mode_key][0]}）",
             description="\n".join(lines),
@@ -584,7 +587,7 @@ _name_cache = {}
 def fetch_leaderboards():
     if _leaderboard_cache["data"] and time.time() - _leaderboard_cache["time"] < LEADERBOARD_CACHE_SECONDS:
         return _leaderboard_cache["data"]
-    res = hypixel_get("leaderboards")
+    res = aurora_get("v3/cache/hypixel/leaderboards")
     if not res.get("success"):
         raise RuntimeError(res.get("cause", "リーダーボード取得失敗"))
     _leaderboard_cache["data"] = res["leaderboards"]
@@ -625,7 +628,7 @@ async def leaderboard(interaction: discord.Interaction, category: app_commands.C
             description="\n".join(lines) if lines else "データがありません",
             color=0xf39c12,
         )
-        embed.set_footer(text="Data provided by Hypixel API（10分キャッシュ）")
+        embed.set_footer(text="Data provided by Aurora (api.bordic.xyz)")
         await interaction.followup.send(embed=embed)
     except Exception as e:
         await interaction.followup.send(f"⚠️ エラー: {e}")

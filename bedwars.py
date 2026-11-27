@@ -8,7 +8,6 @@ MODES = {
 }
 
 LEADERBOARDS = {
-    "level": ("Bedwars Level", "level", None),
     "wins": ("Wins (総合)", "wins", "overall"),
     "wins_weekly": ("Wins (週間)", "wins", "weekly"),
     "final_kills": ("Final Kills (総合)", "final kills", "overall"),
@@ -25,26 +24,26 @@ def extract_bw_stats(player: dict, mode: str = "overall") -> dict:
     p = MODES[mode][1]
 
     def g(key):
-        return bw.get(f"{p}{key}", 0) or 0
+        return bw.get(f"{p}{key}") or 0
 
     s = {
-        "star": (player.get("achievements") or {}).get("bedwars_level", 0),
-        "coins": bw.get("coins", 0),
-        "games": g("games_played_bedwars"),
+        "star": (player.get("achievements") or {}).get("bedwars_level") or 0,
         "wins": g("wins_bedwars"),
         "losses": g("losses_bedwars"),
-        "kills": g("kills_bedwars"),
-        "deaths": g("deaths_bedwars"),
         "final_kills": g("final_kills_bedwars"),
         "final_deaths": g("final_deaths_bedwars"),
-        "beds_broken": g("beds_broken_bedwars"),
-        "beds_lost": g("beds_lost_bedwars"),
         "winstreak": bw.get(f"{p}winstreak"),
     }
     s["fkdr"] = ratio(s["final_kills"], s["final_deaths"])
     s["wlr"] = ratio(s["wins"], s["losses"])
-    s["kdr"] = ratio(s["kills"], s["deaths"])
-    s["bblr"] = ratio(s["beds_broken"], s["beds_lost"])
+    # Auroraのキャッシュにはモード別のキル・ベッド数がない
+    for key in ("kills", "deaths", "beds_broken", "beds_lost", "kdr", "bblr"):
+        s[key] = None
+    if mode == "overall":
+        for key in ("kills", "deaths", "beds_broken", "beds_lost"):
+            s[key] = bw.get(f"{key}_bedwars") or 0
+        s["kdr"] = ratio(s["kills"], s["deaths"])
+        s["bblr"] = ratio(s["beds_broken"], s["beds_lost"])
     return s
 
 
