@@ -21,14 +21,14 @@ def ratio(a: int, b: int) -> float:
 
 
 def extract_bw_stats(player: dict, mode: str = "overall") -> dict:
-    bw = player.get("stats", {}).get("Bedwars", {})
+    bw = (player.get("stats") or {}).get("Bedwars") or {}
     p = MODES[mode][1]
 
     def g(key):
         return bw.get(f"{p}{key}", 0) or 0
 
     s = {
-        "star": player.get("achievements", {}).get("bedwars_level", 0),
+        "star": (player.get("achievements") or {}).get("bedwars_level", 0),
         "coins": bw.get("coins", 0),
         "games": g("games_played_bedwars"),
         "wins": g("wins_bedwars"),
