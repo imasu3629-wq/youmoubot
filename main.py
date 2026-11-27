@@ -1,6 +1,8 @@
 import discord
 from discord import app_commands
 import requests
+import asyncio
+import time
 from bs4 import BeautifulSoup
 import os
 import io
@@ -13,6 +15,7 @@ from database import (
     get_registered_by_discord, get_ranking_by_fkdr, get_ranking_by_star,
     delete_player
 )
+from bedwars import MODES, LEADERBOARDS, COMPARE_FIELDS, extract_bw_stats, compare_line, find_leaderboard
 
 # --- 24時間稼働設定 ---
 app = Flask('')
@@ -98,12 +101,24 @@ def get_rank(player_data):
 
 
 # --- Hypixel stats取得ヘルパー ---
+def hypixel_get(path: str, **params):
+    res = requests.get(
+        f"https://api.hypixel.net/v2/{path}",
+        params=params,
+        headers={"API-Key": current_api_key},
+        timeout=10,
+    )
+    return res.json()
+
+
+def fetch_hypixel_player(uuid: str):
+    return hypixel_get("player", uuid=uuid).get("player")
+
+
 def fetch_hypixel_stats(uuid: str):
-    url = f"https://api.hypixel.net/v2/player?key={current_api_key}&uuid={uuid}"
-    res = requests.get(url).json()
-    if not res.get("player"):
+    p = fetch_hypixel_player(uuid)
+    if not p:
         return None, None, None
-    p = res["player"]
     bw = p.get("stats", {}).get("Bedwars", {})
     star = p.get("achievements", {}).get("bedwars_level", 0)
     fk = bw.get("final_kills_bedwars", 0)
@@ -475,6 +490,145 @@ async def delete(interaction: discord.Interaction, mcid: str):
             await interaction.followup.send("❌ 削除に失敗しました。", ephemeral=True)
     except Exception as e:
         await interaction.followup.send(f"⚠️ エラー: {e}", ephemeral=True)
+
+
+# ====================
+# Bedwars 詳細コマンド
+# ====================
+
+MODE_CHOICES = [app_commands.Choice(name=label, value=key) for key, (label, _) in MODES.items()]
+LEADERBOARD_CHOICES = [app_commands.Choice(name=label, value=key) for key, (label, _, _) in LEADERBOARDS.items()]
+
+
+def fetch_player_with_stats(mcid: str, mode: str):
+    profile = fetch_player_profile(mcid)
+    if not profile:
+        return None, None, "❌ プレイヤーが見つかりません。"
+    player = fetch_hypixel_player(profile["uuid"])
+    if not player:
+        return profile, None, f"❌ `{profile['name']}` のHypixelデータがありません。"
+    return profile, player, None
+
+
+# --- /bwstats ---
+@tree.command(name="bwstats", description="Bedwarsの詳細戦績を表示します")
+@app_commands.describe(mcid="MCID", mode="モード（省略時は総合）")
+@app_commands.choices(mode=MODE_CHOICES)
+async def bwstats(interaction: discord.Interaction, mcid: str, mode: app_commands.Choice[str] = None):
+    await interaction.response.defer()
+    mode_key = mode.value if mode else "overall"
+    try:
+        profile, player, error = await asyncio.to_thread(fetch_player_with_stats, mcid, mode_key)
+        if error:
+            await interaction.followup.send(error)
+            return
+        s = extract_bw_stats(player, mode_key)
+        rank_label = get_rank(player)
+        name = profile["name"]
+        display_name = f"{rank_label} {name}" if rank_label else name
+
+        embed = discord.Embed(
+            title=f"{display_name} のBedwars戦績（{MODES[mode_key][0]}）",
+            color=0xe67e22,
+        )
+        embed.set_thumbnail(url=f"https://visage.surgeplay.com/bust/128/{profile['uuid']}.png")
+        embed.add_field(name="⭐ Star", value=f"{s['star']:,}", inline=True)
+        embed.add_field(name="🎮 Games", value=f"{s['games']:,}", inline=True)
+        ws = "API非公開" if s["winstreak"] is None else f"{s['winstreak']:,}"
+        embed.add_field(name="🔥 Winstreak", value=ws, inline=True)
+        embed.add_field(name="⚔️ FKDR", value=f"{s['fkdr']}\n({s['final_kills']:,} / {s['final_deaths']:,})", inline=True)
+        embed.add_field(name="🏆 WLR", value=f"{s['wlr']}\n({s['wins']:,} / {s['losses']:,})", inline=True)
+        embed.add_field(name="🛏️ BBLR", value=f"{s['bblr']}\n({s['beds_broken']:,} / {s['beds_lost']:,})", inline=True)
+        embed.add_field(name="🗡️ KDR", value=f"{s['kdr']}\n({s['kills']:,} / {s['deaths']:,})", inline=True)
+        embed.add_field(name="💰 Coins", value=f"{s['coins']:,}", inline=True)
+        embed.set_footer(text=f"FKDR評価: {fkdr_comment(s['fkdr'])}")
+        await interaction.followup.send(embed=embed)
+    except Exception as e:
+        await interaction.followup.send(f"⚠️ エラー: {e}")
+
+
+# --- /compare ---
+@tree.command(name="compare", description="2人のBedwars戦績を比較します")
+@app_commands.describe(mcid1="1人目のMCID", mcid2="2人目のMCID", mode="モード（省略時は総合）")
+@app_commands.choices(mode=MODE_CHOICES)
+async def compare(interaction: discord.Interaction, mcid1: str, mcid2: str, mode: app_commands.Choice[str] = None):
+    await interaction.response.defer()
+    mode_key = mode.value if mode else "overall"
+    try:
+        (p1, pl1, e1), (p2, pl2, e2) = await asyncio.gather(
+            asyncio.to_thread(fetch_player_with_stats, mcid1, mode_key),
+            asyncio.to_thread(fetch_player_with_stats, mcid2, mode_key),
+        )
+        if e1 or e2:
+            await interaction.followup.send(e1 or e2)
+            return
+        s1 = extract_bw_stats(pl1, mode_key)
+        s2 = extract_bw_stats(pl2, mode_key)
+        lines = [compare_line(label, s1[key], s2[key]) for label, key in COMPARE_FIELDS]
+        embed = discord.Embed(
+            title=f"⚖️ {p1['name']} vs {p2['name']}（{MODES[mode_key][0]}）",
+            description="\n".join(lines),
+            color=0x1abc9c,
+        )
+        await interaction.followup.send(embed=embed)
+    except Exception as e:
+        await interaction.followup.send(f"⚠️ エラー: {e}")
+
+
+# --- /leaderboard ---
+LEADERBOARD_CACHE_SECONDS = 600
+_leaderboard_cache = {"time": 0, "data": None}
+_name_cache = {}
+
+
+def fetch_leaderboards():
+    if _leaderboard_cache["data"] and time.time() - _leaderboard_cache["time"] < LEADERBOARD_CACHE_SECONDS:
+        return _leaderboard_cache["data"]
+    res = hypixel_get("leaderboards")
+    if not res.get("success"):
+        raise RuntimeError(res.get("cause", "リーダーボード取得失敗"))
+    _leaderboard_cache["data"] = res["leaderboards"]
+    _leaderboard_cache["time"] = time.time()
+    return _leaderboard_cache["data"]
+
+
+def cached_name(uuid: str):
+    uuid = uuid.replace("-", "")
+    if uuid not in _name_cache:
+        name = fetch_current_name(uuid)
+        if not name:
+            return uuid[:8]
+        _name_cache[uuid] = name
+    return _name_cache[uuid]
+
+
+@tree.command(name="leaderboard", description="Hypixel公式のBedwarsリーダーボードを表示します")
+@app_commands.describe(category="ランキングの種類", count="表示人数（1〜25、省略時は10）")
+@app_commands.choices(category=LEADERBOARD_CHOICES)
+async def leaderboard(interaction: discord.Interaction, category: app_commands.Choice[str], count: app_commands.Range[int, 1, 25] = 10):
+    await interaction.response.defer()
+    try:
+        data = await asyncio.to_thread(fetch_leaderboards)
+        lb = find_leaderboard(data, category.value)
+        if not lb:
+            await interaction.followup.send("❌ このリーダーボードは現在取得できません。")
+            return
+        leaders = lb.get("leaders", [])[:count]
+        names = await asyncio.gather(*(asyncio.to_thread(cached_name, u) for u in leaders))
+        medals = ["🥇", "🥈", "🥉"]
+        lines = [
+            f"{medals[i] if i < 3 else f'`{i+1}.`'} **{discord.utils.escape_markdown(n)}**"
+            for i, n in enumerate(names)
+        ]
+        embed = discord.Embed(
+            title=f"🌐 Hypixel Bedwars リーダーボード — {category.name}",
+            description="\n".join(lines) if lines else "データがありません",
+            color=0xf39c12,
+        )
+        embed.set_footer(text="Data provided by Hypixel API（10分キャッシュ）")
+        await interaction.followup.send(embed=embed)
+    except Exception as e:
+        await interaction.followup.send(f"⚠️ エラー: {e}")
 
 
 # --- /setkey（既存） ---
