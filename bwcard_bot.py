@@ -80,7 +80,7 @@ def load_card_data(player: dict, uuid: str):
     player["stats"] = stats
     player.setdefault("uuid", uuid)
     skin, slim = fetch_skin(uuid)
-    return parse_player(player), skin, slim, bool(snapshot)
+    return parse_player(player), skin, slim, bool(snapshot and "games_played_bedwars" in snapshot)
 
 
 class Settings:
