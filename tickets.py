@@ -116,10 +116,9 @@ async def close_ticket(interaction: discord.Interaction):
 
 
 PANELS = {
-    "register": (
-        "📝 MCID登録",
-        "下のボタンを押してMCIDを入力すると登録できます。\n"
-        "登録した人は、ランキングチャンネル（FKDR・Star・Win・Final Kill）に1時間ごとに反映されます。",
+    "verify": (
+        "✅ 認証",
+        "下のボタンを押して、表示される計算問題に答えてください。\n正解すると「認証済み」ロールが付き、ほかのチャンネルが見られるようになります。",
         0x2ECC71,
     ),
     "ticket": (

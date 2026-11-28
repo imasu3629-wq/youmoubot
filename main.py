@@ -22,6 +22,7 @@ from cards import build_compare_card, build_leaderboard_card, fetch_head
 from bwcard_bot import CardView, SettingsView, load_card_data
 import ai
 import tickets
+import verify
 
 # --- 24時間稼働設定 ---
 app = Flask('')
@@ -292,7 +293,7 @@ def build_ranking_embed(rows, mode: str):
 @bot.event
 async def on_ready():
     init_db()
-    bot.add_view(RegisterPanelView())
+    bot.add_view(verify.VerifyPanelView())
     bot.add_view(tickets.TicketPanelView())
     bot.add_view(tickets.TicketCloseView())
     if not update_ranking_boards.is_running():
@@ -310,23 +311,6 @@ async def on_ready():
 async def register(interaction: discord.Interaction, mcid: str):
     await interaction.response.defer(ephemeral=True)
     await do_register(interaction, mcid)
-
-
-class RegisterModal(discord.ui.Modal, title="MCIDを登録"):
-    mcid = discord.ui.TextInput(label="MCID", placeholder="例: Wlnks", min_length=3, max_length=16)
-
-    async def on_submit(self, interaction: discord.Interaction):
-        await interaction.response.defer(ephemeral=True)
-        await do_register(interaction, self.mcid.value.strip())
-
-
-class RegisterPanelView(discord.ui.View):
-    def __init__(self):
-        super().__init__(timeout=None)
-
-    @discord.ui.button(label="MCIDを登録", emoji="📝", style=discord.ButtonStyle.success, custom_id="register:open")
-    async def open_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.send_modal(RegisterModal())
 
 
 async def do_register(interaction: discord.Interaction, mcid: str):
@@ -801,16 +785,16 @@ async def rankingchannel(interaction: discord.Interaction, kind: app_commands.Ch
 
 
 # --- パネル ---
-@tree.command(name="panel", description="MCID登録・チケットのボタン付きパネルをこのチャンネルに投稿します")
+@tree.command(name="panel", description="認証・チケットのボタン付きパネルをこのチャンネルに投稿します")
 @app_commands.describe(kind="パネルの種類")
 @app_commands.choices(kind=[
-    app_commands.Choice(name="MCID登録", value="register"),
+    app_commands.Choice(name="認証", value="verify"),
     app_commands.Choice(name="チケット", value="ticket"),
 ])
 @app_commands.default_permissions(manage_channels=True)
 @app_commands.guild_only()
 async def panel(interaction: discord.Interaction, kind: app_commands.Choice[str]):
-    view = RegisterPanelView() if kind.value == "register" else tickets.TicketPanelView()
+    view = verify.VerifyPanelView() if kind.value == "verify" else tickets.TicketPanelView()
     try:
         await interaction.channel.send(embed=tickets.panel_embed(kind.value), view=view)
     except discord.HTTPException as e:
