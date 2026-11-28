@@ -38,8 +38,20 @@ TOKEN = os.environ['DISCORD_TOKEN']
 current_api_key = os.environ.get('HYPIXEL_KEY', '')
 AUTHORIZED_USERS = [1278574483195559977]
 
+
+def message_content_allowed() -> bool:
+    """Developer Portal で Message Content Intent がオンか（オフのまま要求すると接続できない）。"""
+    try:
+        res = requests.get("https://discord.com/api/v10/applications/@me", headers={"Authorization": f"Bot {TOKEN}"}, timeout=10)
+        return bool(res.json().get("flags", 0) & (1 << 18 | 1 << 19))
+    except (requests.RequestException, ValueError):
+        return False
+
+
 intents = discord.Intents.default()
-intents.message_content = True
+intents.message_content = message_content_allowed()
+if not intents.message_content:
+    print("⚠️ Message Content Intent がオフなので、AIはメンションされたときだけ返事します")
 bot = discord.Client(intents=intents)
 tree = app_commands.CommandTree(bot)
 
