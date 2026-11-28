@@ -116,17 +116,17 @@ def deepseek_reply(messages: list):
     """返事の文と、ツールで調べた戦績カードのデータ（無ければ None）を返す。"""
     messages = [{"role": "system", "content": SYSTEM_PROMPT}, *messages]
     card = None
-    for _ in range(3):
+    for round_ in range(3):
         res = requests.post(
             DEEPSEEK_URL,
             headers={"Authorization": f"Bearer {DEEPSEEK_KEY}"},
             json={"model": DEEPSEEK_MODEL, "messages": messages, "max_tokens": 600,
-                  **({"tools": [STATS_TOOL]} if lookup_player else {})},
+                  **({"tools": [STATS_TOOL]} if lookup_player and round_ < 2 else {})},
             timeout=60,
         )
         res.raise_for_status()
         msg = res.json()["choices"][0]["message"]
-        if not msg.get("tool_calls"):
+        if not msg.get("tool_calls") or round_ == 2:
             return (msg.get("content") or "").strip(), card
         messages.append(msg)
         for call in msg["tool_calls"]:
