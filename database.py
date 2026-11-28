@@ -52,12 +52,13 @@ def save_uuid_cache(mcid: str, uuid: str):
         )
 
 # --- 登録 ---
-def register_player(uuid: str, mcid: str, discord_id: str, star: int, fkdr: float, wins: int = 0, final_kills: int = 0):
+def register_player(uuid: str, mcid: str, discord_id: str, star: int, fkdr: float, wins: int = 0, final_kills: int = 0) -> bool:
+    """登録できたら True。すでに誰かが登録済みなら False。"""
     with get_conn() as conn:
-        conn.execute("""
-            INSERT OR REPLACE INTO registrations (uuid, mcid, discord_id, star, fkdr, wins, final_kills, registered_at, updated_at)
+        return conn.execute("""
+            INSERT OR IGNORE INTO registrations (uuid, mcid, discord_id, star, fkdr, wins, final_kills, registered_at, updated_at)
             VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))
-        """, (uuid, mcid, str(discord_id), star, fkdr, wins, final_kills))
+        """, (uuid, mcid, str(discord_id), star, fkdr, wins, final_kills)).rowcount == 1
 
 def update_stats(uuid: str, mcid: str, star: int, fkdr: float, wins: int = None, final_kills: int = None):
     with get_conn() as conn:

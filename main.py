@@ -324,7 +324,9 @@ async def register(interaction: discord.Interaction, mcid: str):
             return
         star, fkdr, _, _ = s
 
-        register_player(uuid, official_mcid, interaction.user.id, *s)
+        if not register_player(uuid, official_mcid, interaction.user.id, *s):
+            await interaction.followup.send(f"⚠️ `{official_mcid}` はすでに登録されています。", ephemeral=True)
+            return
 
         embed = discord.Embed(title="✅ 登録完了", color=0x2ecc71)
         embed.add_field(name="MCID", value=official_mcid, inline=True)
