@@ -828,7 +828,7 @@ def build_board_files(kind: str) -> list[discord.File]:
         names = [r["mcid"] for r in page]
         title = f"{label} Ranking" + (f"  #{start + 1}-{start + len(page)}" if len(rows) > BOARD_PAGE else "")
         buf = build_leaderboard_card(title, names, heads[start:start + BOARD_PAGE], [fmt(r) for r in page], start=start, cols=1, background=background,
-                                    marks=[bool(r["tags"]) for r in page])
+                                    marks=[[t for t in (r["tags"] or "").split(",") if t] for r in page])
         alt = f"{label} ランキング: " + ", ".join(f"{start + i + 1}. {n}{' ⚠チーター' if r['tags'] else ''} {fmt(r)}" for i, (n, r) in enumerate(zip(names, page)))
         files.append(discord.File(buf, filename=f"ranking_{kind}_{start // BOARD_PAGE + 1}.png", description=alt[:1000]))
     return files
