@@ -16,6 +16,7 @@ from PIL import Image
 from bwcard import MODES, PART_SECTIONS, SECTIONS, STAT_SECTIONS, WA_BACKGROUNDS, load_skin, parse_player
 from bwcard import prestige as P
 from bwcard import render_card
+from bwcard.designs.standard import GRID
 
 FOOTER = os.environ.get("CARD_FOOTER", "youmoubot")
 BACKGROUND_DIR = Path(os.environ.get("BACKGROUND_DIR", "backgrounds"))
@@ -130,26 +131,43 @@ async def make_file(data, mode: str, show, background) -> discord.File:
     return discord.File(buf, filename=f"bedwars_{stats.username}_{mode}.{buf.ext}", description=alt)
 
 
+def _split_label(label: str) -> tuple[str, str | None]:
+    """'Wins（勝ち）' → ('Wins', '勝ち')"""
+    name, _, rest = label.partition("（")
+    return name, (rest.rstrip("）") or None)
+
+
+def _mark(on: bool) -> str:
+    return "✅" if on else "▫️"
+
+
 class SectionSelect(discord.ui.Select):
-    def __init__(self, user_id: int, choices: dict, placeholder: str, row: int):
+    def __init__(self, user_id: int, choices: dict, title: str, row: int):
         on = settings.show(user_id)
         self.choices = choices
-        super().__init__(placeholder=placeholder, row=row, min_values=0, max_values=len(choices), options=[
-            discord.SelectOption(label=label, value=key, default=key in on) for key, label in choices.items()])
+        count = sum(k in on for k in choices)
+        options = []
+        for key, label in choices.items():
+            name, desc = _split_label(label)
+            options.append(discord.SelectOption(label=name, value=key, description=desc, default=key in on))
+        super().__init__(placeholder=f"{title}（{count}/{len(choices)} 表示中）", row=row,
+                         min_values=0, max_values=len(choices), options=options)
 
     async def callback(self, interaction: discord.Interaction):
         others = settings.show(interaction.user.id) - set(self.choices)
         settings.set_show(interaction.user.id, others | set(self.values))
-        await self.view.saved(interaction)
+        await self.view.saved(interaction, "選んだ項目を保存しました")
 
 
-class ResetButton(discord.ui.Button):
-    def __init__(self):
-        super().__init__(label="全部表示に戻す", style=discord.ButtonStyle.secondary, row=2)
+class BulkButton(discord.ui.Button):
+    def __init__(self, label: str, style: discord.ButtonStyle, keys, show: bool, done: str):
+        super().__init__(label=label, style=style, row=2)
+        self.keys, self.show, self.done = set(keys), show, done
 
     async def callback(self, interaction: discord.Interaction):
-        settings.reset(interaction.user.id)
-        await self.view.saved(interaction)
+        on = settings.show(interaction.user.id)
+        settings.set_show(interaction.user.id, (on | self.keys) if self.show else (on - self.keys))
+        await self.view.saved(interaction, self.done)
 
 
 class SettingsView(discord.ui.View):
@@ -160,19 +178,40 @@ class SettingsView(discord.ui.View):
 
     def _rebuild(self):
         self.clear_items()
-        self.add_item(SectionSelect(self.user_id, STAT_SECTIONS, "統計のマス（Wins・FKDRなど12個）", 0))
-        self.add_item(SectionSelect(self.user_id, PART_CHOICES, "スキン・連勝・一番下の情報", 1))
-        self.add_item(ResetButton())
+        self.add_item(SectionSelect(self.user_id, STAT_SECTIONS, "📊 統計のマス", 0))
+        self.add_item(SectionSelect(self.user_id, PART_CHOICES, "🧩 そのほかの部品", 1))
+        self.add_item(BulkButton("すべて表示", discord.ButtonStyle.success, USER_SECTIONS, True,
+                                 "すべて表示に戻しました"))
+        self.add_item(BulkButton("統計をすべて隠す", discord.ButtonStyle.danger, STAT_SECTIONS, False,
+                                 "統計のマスをすべて隠しました"))
 
-    def summary(self) -> str:
+    def embed(self, notice: str | None = None) -> discord.Embed:
         on = settings.show(self.user_id)
-        off = [USER_SECTIONS[k].split("（")[0] for k in USER_SECTIONS if k not in on]
-        text = f"表示中：{len(on)} / {len(USER_SECTIONS)} 項目"
-        return text + (f"\n非表示：{'、'.join(off)}" if off else "")
+        total, count = len(USER_SECTIONS), len(on & set(USER_SECTIONS))
+        embed = discord.Embed(
+            title="⚙️ /bw カードの表示設定",
+            description=(f"✅ **{notice}**\n\n" if notice else "")
+            + "下のメニューで表示する項目を選ぶと、すぐに保存されます。\n名前とレベルバーはいつも表示されます。",
+            color=0x2ECC71 if count == total else (0xE67E22 if count else 0x95A5A6),
+        )
+        grid = []
+        for row in GRID:
+            cells = [f"{_mark(k in on)} {_split_label(STAT_SECTIONS[k])[0]}" for k, _, _ in row if k in STAT_SECTIONS]
+            grid.append("　".join(cells))
+        stat_count = sum(k in on for k in STAT_SECTIONS)
+        embed.add_field(name=f"📊 統計のマス　{stat_count}/{len(STAT_SECTIONS)}", value="\n".join(grid), inline=False)
+        parts = [f"{_mark(k in on)} {PART_CHOICES[k]}" for k in PART_CHOICES]
+        part_count = sum(k in on for k in PART_CHOICES)
+        embed.add_field(name=f"🧩 そのほかの部品　{part_count}/{len(PART_CHOICES)}", value="\n".join(parts), inline=False)
+        if not AURORA_KEY:
+            embed.add_field(name="ℹ️ メモ", value="Kills・Deaths・KDR・ベッドの項目は、総合モードのときだけ表示されます。",
+                            inline=False)
+        embed.set_footer(text=f"表示中 {count} / {total} 項目 ・ 設定はあなたのカードだけに反映されます")
+        return embed
 
-    async def saved(self, interaction: discord.Interaction):
+    async def saved(self, interaction: discord.Interaction, notice: str):
         self._rebuild()
-        await interaction.response.edit_message(content=f"✅ 保存しました。\n{self.summary()}", view=self)
+        await interaction.response.edit_message(content=None, embed=self.embed(notice), view=self)
 
 
 class ModeSelect(discord.ui.Select):
