@@ -139,7 +139,7 @@ MONTHLY_COLUMNS = {
     "m_star": _GAIN.format("star"),
     "m_wins": _GAIN.format("wins"),
     "m_final_kills": _GAIN.format("final_kills"),
-    "m_fkdr": f"ROUND(CAST({_GAIN.format('final_kills')} AS REAL) / MAX({_GAIN.format('final_deaths')}, 1), 2)",
+    "m_fkdr": f"CAST({_GAIN.format('final_kills')} AS REAL) / MAX({_GAIN.format('final_deaths')}, 1)",
 }
 
 def get_ranking(column: str, limit=10):
