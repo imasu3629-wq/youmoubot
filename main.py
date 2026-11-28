@@ -805,14 +805,17 @@ async def update_ranking_boards():
         await run_ranking_update()
 
 
-async def run_ranking_update():
-    if not load_boards():
+async def run_ranking_update(guild_id: int | None = None):
+    """登録者の戦績を取り直し、ランキング投稿を更新する。guild_id を渡すとそのサーバーの投稿だけ。"""
+    if guild_id is None and not load_boards():
         return
     await asyncio.to_thread(refresh_all_registrations)
     async with boards_lock:
         boards = load_boards()
         changed = False
         for key, entry in boards.items():
+            if guild_id is not None and not key.startswith(f"{guild_id}:"):
+                continue
             try:
                 changed |= await post_board(entry)
             except discord.HTTPException as e:
@@ -850,7 +853,7 @@ async def rankingchannel(interaction: discord.Interaction, kind: app_commands.Ch
     await interaction.followup.send(f"✅ このチャンネルに {kind.name} ランキングを投稿しました。毎日0時（日本時間）に更新します。", ephemeral=True)
 
 
-@tree.command(name="rankingupdate", description="登録者の戦績を取り直して、ランキングを今すぐ更新します（管理者用）")
+@tree.command(name="rankingupdate", description="登録者の戦績を取り直して、このサーバーのランキングを今すぐ更新します（管理者用）")
 @app_commands.default_permissions(administrator=True)
 @app_commands.guild_only()
 async def rankingupdate(interaction: discord.Interaction):
@@ -862,7 +865,7 @@ async def rankingupdate(interaction: discord.Interaction):
         return
     await interaction.response.defer(ephemeral=True)
     async with update_lock:
-        await run_ranking_update()
+        await run_ranking_update(interaction.guild_id)
     await interaction.followup.send("✅ ランキングを更新しました。", ephemeral=True)
 
 
