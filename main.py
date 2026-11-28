@@ -17,7 +17,6 @@ from database import (
 )
 from bedwars import MODES, LEADERBOARDS, COMPARE_FIELDS, extract_bw_stats, find_leaderboard
 from cards import build_compare_card, build_leaderboard_card, fetch_head
-from bwcard import DESIGNS
 from bwcard_bot import CardView, SettingsView, load_card_data
 
 # --- 24時間稼働設定 ---
@@ -505,7 +504,6 @@ async def delete(interaction: discord.Interaction, mcid: str):
 
 MODE_CHOICES = [app_commands.Choice(name=label, value=key) for key, (label, _) in MODES.items()]
 CARD_MODE_LABELS = {"overall": "Overall", "solo": "Solo", "doubles": "Doubles", "threes": "3v3v3v3", "fours": "4v4v4v4", "4v4": "4v4"}
-DESIGN_CHOICES = [app_commands.Choice(name=label, value=key) for key, label in DESIGNS.items()]
 LEADERBOARD_CHOICES = [app_commands.Choice(name=label, value=key) for key, (label, _, _) in LEADERBOARDS.items()]
 
 
@@ -521,10 +519,9 @@ def fetch_player_with_stats(mcid: str, mode: str):
 
 # --- /bwstats ---
 @tree.command(name="bwstats", description="Bedwarsの詳細戦績を表示します")
-@app_commands.describe(mcid="MCID", mode="モード（省略時は総合）", design="カードのデザイン（省略時はスタンダード）")
-@app_commands.choices(mode=MODE_CHOICES, design=DESIGN_CHOICES)
-async def bwstats(interaction: discord.Interaction, mcid: str, mode: app_commands.Choice[str] = None,
-                  design: app_commands.Choice[str] = None):
+@app_commands.describe(mcid="MCID", mode="モード（省略時は総合）")
+@app_commands.choices(mode=MODE_CHOICES)
+async def bwstats(interaction: discord.Interaction, mcid: str, mode: app_commands.Choice[str] = None):
     await interaction.response.defer()
     mode_key = mode.value if mode else "overall"
     try:
@@ -533,7 +530,7 @@ async def bwstats(interaction: discord.Interaction, mcid: str, mode: app_command
             await interaction.followup.send(error)
             return
         data = await asyncio.to_thread(load_card_data, player, profile["uuid"])
-        view = CardView(interaction.user.id, data, design.value if design else "standard", mode_key)
+        view = CardView(interaction.user.id, data, mode_key)
         view.message = await interaction.followup.send(file=await view.render(), view=view, wait=True)
     except Exception as e:
         await interaction.followup.send(f"⚠️ エラー: {e}")

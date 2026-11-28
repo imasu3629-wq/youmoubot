@@ -18,11 +18,9 @@ __all__ = ["render_card", "parse_player", "load_skin", "PlayerStats", "ModeStats
 
 DESIGNS = {
     "standard": "スタンダード（参考画像2枚のいいとこ取り）",
-    "inventory": "インベントリ風（アイテムの説明文）",
-    "washi": "和風（和紙と朱印）",
 }
 # 標準の画像形式（ドット絵は背景透明のPNG、和紙の質感はJPEGの方がずっと軽い）
-DEFAULT_FORMAT = {"standard": "PNG", "inventory": "PNG", "washi": "JPEG"}
+DEFAULT_FORMAT = {"standard": "PNG"}
 
 
 def render_card(stats: PlayerStats, design: str = "standard", mode: str = "overall", *,
@@ -32,7 +30,7 @@ def render_card(stats: PlayerStats, design: str = "standard", mode: str = "overa
     """統計カードを描いて画像（BytesIO の仲間）を返す。拡張子は戻り値の .ext に入っています。
 
     stats      … parse_player() で作った PlayerStats
-    design     … 'standard'（いいとこ取り）/ 'inventory'（マイクラの説明文風）/ 'washi'（和風）
+    design     … 'standard'
     mode       … 'overall' / 'solo' / 'doubles' / 'threes' / 'fours' / '4v4'
     skin       … load_skin() で読んだスキン画像（None なら無地のシルエット）
     slim       … スキンが細い腕（Alex型）なら True
@@ -45,9 +43,9 @@ def render_card(stats: PlayerStats, design: str = "standard", mode: str = "overa
         buf = render_card(stats, "standard", skin=skin)
         await interaction.followup.send(file=discord.File(buf, f"bedwars.{buf.ext}"))
     """
-    from .designs import inventory, standard, washi
+    from .designs import standard
 
-    mod = {"standard": standard, "inventory": inventory, "washi": washi}.get(design)
+    mod = {"standard": standard}.get(design)
     if mod is None:
         raise ValueError(f"unknown design: {design}")
     if mode not in MODES:

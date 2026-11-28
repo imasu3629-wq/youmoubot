@@ -11,7 +11,7 @@ import discord
 import requests
 from PIL import Image
 
-from bwcard import DESIGNS, MODES, PART_SECTIONS, SECTIONS, STAT_SECTIONS, WA_BACKGROUNDS, load_skin, parse_player
+from bwcard import MODES, PART_SECTIONS, SECTIONS, STAT_SECTIONS, WA_BACKGROUNDS, load_skin, parse_player
 from bwcard import prestige as P
 from bwcard import render_card
 
@@ -95,13 +95,11 @@ def pick_background():
     return random.choice(WA_BACKGROUNDS) if CARD_BACKGROUND == "random" else CARD_BACKGROUND
 
 
-async def make_file(data, design: str, mode: str, show, background) -> discord.File:
+async def make_file(data, mode: str, show, background) -> discord.File:
     stats, skin, slim = data
     show = set(show) - AURORA_MISSING - (OVERALL_ONLY if mode != "overall" else set())
-    bg = None
-    if design == "standard":
-        bg = Image.open(background) if isinstance(background, Path) else background
-    buf = await asyncio.to_thread(render_card, stats, design, mode, skin=skin, slim=slim,
+    bg = Image.open(background) if isinstance(background, Path) else background
+    buf = await asyncio.to_thread(render_card, stats, "standard", mode, skin=skin, slim=slim,
                                   background=bg, footer=FOOTER, show=show)
     m = stats.modes[mode]
     alt = (f"{stats.username} Bedwars {MODES[mode][1]}: Star {stats.level}, FKDR {m.fkdr:.2f}, "
@@ -146,7 +144,7 @@ class SettingsView(discord.ui.View):
     def summary(self) -> str:
         on = settings.show(self.user_id)
         off = [USER_SECTIONS[k].split("（")[0] for k in USER_SECTIONS if k not in on]
-        text = f"表示中：{len(on)} / {len(USER_SECTIONS)} 項目（スタンダードのデザインだけに効きます）"
+        text = f"表示中：{len(on)} / {len(USER_SECTIONS)} 項目"
         return text + (f"\n非表示：{'、'.join(off)}" if off else "")
 
     async def saved(self, interaction: discord.Interaction):
@@ -166,19 +164,9 @@ class ModeSelect(discord.ui.Select):
         await self.view.update(interaction, mode=self.values[0])
 
 
-class DesignSelect(discord.ui.Select):
-    def __init__(self, view):
-        super().__init__(placeholder="デザインを切り替え", row=1, options=[
-            discord.SelectOption(label=label, value=key, default=key == view.design)
-            for key, label in DESIGNS.items()])
-
-    async def callback(self, interaction: discord.Interaction):
-        await self.view.update(interaction, design=self.values[0])
-
-
 class SettingsButton(discord.ui.Button):
     def __init__(self):
-        super().__init__(label="表示する項目", emoji="⚙️", style=discord.ButtonStyle.secondary, row=2)
+        super().__init__(label="表示する項目", emoji="⚙️", style=discord.ButtonStyle.secondary, row=1)
 
     async def callback(self, interaction: discord.Interaction):
         sv = SettingsView(interaction.user.id, on_change=self.view.redraw)
@@ -186,9 +174,9 @@ class SettingsButton(discord.ui.Button):
 
 
 class CardView(discord.ui.View):
-    def __init__(self, owner_id: int, data, design: str, mode: str):
+    def __init__(self, owner_id: int, data, mode: str):
         super().__init__(timeout=300)
-        self.owner_id, self.data, self.design, self.mode = owner_id, data, design, mode
+        self.owner_id, self.data, self.mode = owner_id, data, mode
         self.background = pick_background()
         self.message = None
         self._lock = asyncio.Lock()
@@ -197,7 +185,6 @@ class CardView(discord.ui.View):
     def _rebuild(self):
         self.clear_items()
         self.add_item(ModeSelect(self))
-        self.add_item(DesignSelect(self))
         self.add_item(SettingsButton())
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
@@ -209,11 +196,10 @@ class CardView(discord.ui.View):
         return True
 
     async def render(self) -> discord.File:
-        return await make_file(self.data, self.design, self.mode, settings.show(self.owner_id), self.background)
+        return await make_file(self.data, self.mode, settings.show(self.owner_id), self.background)
 
-    async def update(self, interaction: discord.Interaction, *, mode=None, design=None):
-        self.mode = mode or self.mode
-        self.design = design or self.design
+    async def update(self, interaction: discord.Interaction, *, mode: str):
+        self.mode = mode
         self._rebuild()
         await interaction.response.defer()
         async with self._lock:
