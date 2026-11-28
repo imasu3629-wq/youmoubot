@@ -800,6 +800,25 @@ async def rankingchannel(interaction: discord.Interaction, kind: app_commands.Ch
     await interaction.followup.send(f"✅ このチャンネルに {kind.name} ランキングを投稿しました。1時間ごとに更新します。", ephemeral=True)
 
 
+# --- パネル ---
+@tree.command(name="panel", description="MCID登録・チケットのボタン付きパネルをこのチャンネルに投稿します")
+@app_commands.describe(kind="パネルの種類")
+@app_commands.choices(kind=[
+    app_commands.Choice(name="MCID登録", value="register"),
+    app_commands.Choice(name="チケット", value="ticket"),
+])
+@app_commands.default_permissions(manage_channels=True)
+@app_commands.guild_only()
+async def panel(interaction: discord.Interaction, kind: app_commands.Choice[str]):
+    view = RegisterPanelView() if kind.value == "register" else tickets.TicketPanelView()
+    try:
+        await interaction.channel.send(embed=tickets.panel_embed(kind.value), view=view)
+    except discord.HTTPException as e:
+        await interaction.response.send_message(f"⚠️ 投稿できませんでした: {e}", ephemeral=True)
+        return
+    await interaction.response.send_message(f"✅ {kind.name}パネルを投稿しました。", ephemeral=True)
+
+
 # --- AIチャンネル ---
 @bot.event
 async def on_message(message: discord.Message):
