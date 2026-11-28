@@ -41,11 +41,15 @@ AUTHORIZED_USERS = [1278574483195559977]
 
 def message_content_allowed() -> bool:
     """Developer Portal で Message Content Intent がオンか（オフのまま要求すると接続できない）。"""
-    try:
-        res = requests.get("https://discord.com/api/v10/applications/@me", headers={"Authorization": f"Bot {TOKEN}"}, timeout=10)
-        return bool(res.json().get("flags", 0) & (1 << 18 | 1 << 19))
-    except (requests.RequestException, ValueError):
-        return False
+    for attempt in range(3):
+        try:
+            res = requests.get("https://discord.com/api/v10/applications/@me", headers={"Authorization": f"Bot {TOKEN}"}, timeout=10)
+            res.raise_for_status()
+            return bool(res.json().get("flags", 0) & (1 << 18 | 1 << 19))
+        except (requests.RequestException, ValueError) as e:
+            print(f"⚠️ Intent の確認に失敗 ({attempt + 1}/3): {e}")
+            time.sleep(5)
+    raise SystemExit("Discord API に接続できないので終了します（systemd が再起動します）")
 
 
 intents = discord.Intents.default()
