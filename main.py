@@ -310,7 +310,11 @@ async def on_ready():
 # --- /register ---
 @tree.command(name="register", description="MCIDを登録してBedwars戦績を記録します（管理者用）")
 @app_commands.default_permissions(administrator=True)
+@app_commands.guild_only()
 async def register(interaction: discord.Interaction, mcid: str):
+    if not interaction.user.guild_permissions.administrator:
+        await interaction.response.send_message("❌ このコマンドは管理者だけが使えます。MCID申請チャンネルから申請してください。", ephemeral=True)
+        return
     await interaction.response.defer(ephemeral=True)
     await do_register(interaction, mcid)
 
@@ -351,6 +355,7 @@ async def do_register(interaction: discord.Interaction, mcid: str):
 
 # --- MCID申請チャンネル（管理者が ✅ を付けたら登録） ---
 APPROVE_EMOJI = "✅"
+REGISTERED_EMOJI = "🎉"
 approval_channels = ai.Channels(Path(os.path.abspath(__file__)).with_name("approval_channels.json"))
 
 
@@ -368,13 +373,17 @@ async def on_raw_reaction_add(payload: discord.RawReactionActionEvent):
     words = message.content.split()
     if message.author.bot or not words:
         return
-    try:
-        result = await register_mcid(words[0], message.author.id)
-    except Exception as e:
-        result = f"⚠️ エラーが発生しました: {e}"
-    if isinstance(result, discord.Embed):
-        await message.reply(embed=result, mention_author=False)
+    if message.edited_at:
+        result = "⚠️ 編集されたメッセージは登録できません。MCIDを送り直してください。"
     else:
+        try:
+            result = await register_mcid(words[0], message.author.id)
+        except Exception as e:
+            result = f"⚠️ エラーが発生しました: {e}"
+    if isinstance(result, discord.Embed):
+        await message.add_reaction(REGISTERED_EMOJI)
+    else:
+        await message.add_reaction("❌")
         await message.reply(result, mention_author=False)
 
 
@@ -385,6 +394,8 @@ async def approvalchannel(interaction: discord.Interaction):
     on = approval_channels.toggle(interaction.channel_id)
     msg = (f"✅ このチャンネルをMCID申請チャンネルにしました。送られたMCIDに管理者が {APPROVE_EMOJI} を付けると登録します。"
            if on else "⏹️ このチャンネルのMCID申請を止めました。")
+    if on and not intents.message_content:
+        msg += "\n⚠️ Message Content Intent が無効なので、送られたMCIDを読めません。Developer Portalで有効にしてください。"
     await interaction.response.send_message(msg, ephemeral=True)
 
 
