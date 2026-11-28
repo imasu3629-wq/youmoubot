@@ -39,6 +39,8 @@ def init_db():
                 conn.execute(f"ALTER TABLE registrations ADD COLUMN {col} INTEGER DEFAULT 0")
         if "m_month" not in cols:
             conn.execute("ALTER TABLE registrations ADD COLUMN m_month TEXT")
+        if "tags" not in cols:
+            conn.execute("ALTER TABLE registrations ADD COLUMN tags TEXT DEFAULT ''")
 
 # --- UUID キャッシュ ---
 def get_cached_uuid(mcid: str):
@@ -86,6 +88,12 @@ def update_stats(uuid: str, mcid: str, star: int, fkdr: float, wins: int = None,
             SET m_month = :month, m_star = star, m_wins = wins, m_final_kills = final_kills, m_final_deaths = final_deaths
             WHERE uuid = :uuid AND m_month IS NOT :month
         """, {"month": current_month(), "uuid": uuid})
+
+def set_tags(tags: dict):
+    """uuid -> Urchinのチータータグ名のリスト。"""
+    with get_conn() as conn:
+        conn.executemany("UPDATE registrations SET tags = ? WHERE uuid = ?",
+                         [(",".join(t), uuid) for uuid, t in tags.items()])
 
 def get_all_registrations():
     with get_conn() as conn:
@@ -152,7 +160,7 @@ def get_ranking(column: str, limit=10):
         raise ValueError(column)
     with get_conn() as conn:
         return conn.execute(f"""
-            SELECT uuid, mcid, star, fkdr, wins, final_kills, {value} AS value
+            SELECT uuid, mcid, star, fkdr, wins, final_kills, tags, {value} AS value
             FROM registrations
             ORDER BY value DESC
             LIMIT :limit

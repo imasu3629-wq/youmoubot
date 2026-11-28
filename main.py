@@ -19,7 +19,7 @@ from database import (
     init_db, get_cached_uuid, save_uuid_cache,
     register_player, update_stats, is_registered, is_registered_by_discord,
     get_registered_by_discord, get_ranking_by_fkdr, get_ranking_by_star,
-    delete_player, get_all_registrations, get_ranking, current_month
+    delete_player, get_all_registrations, get_ranking, current_month, set_tags
 )
 from bedwars import MODES, LEADERBOARDS, COMPARE_FIELDS, extract_bw_stats, find_leaderboard
 from cards import build_compare_card, build_leaderboard_card, fetch_head
@@ -778,9 +778,33 @@ def refresh_one(r):
         print(f"⚠️ {r['mcid']} の更新に失敗: {e}")
 
 
+URCHIN_KEY = "".join(os.environ.get("URCHIN_API_KEY", "").split())
+
+
+def fetch_cheater_tags(uuids: list[str]) -> dict:
+    """Urchinのブラックリストを100人ずつ調べ、uuid -> タグ名のリストを返す。"""
+    tags = {}
+    for i in range(0, len(uuids), 100):
+        batch = uuids[i:i + 100]
+        res = requests.post("https://api.urchin.gg/v3/players", headers={"X-API-Key": URCHIN_KEY},
+                            json={"uuids": [u.replace("-", "") for u in batch]}, timeout=20)
+        res.raise_for_status()
+        found = {k.replace("-", "").lower(): v for k, v in res.json().get("players", {}).items()}
+        for u in batch:
+            if (t := found.get(u.replace("-", "").lower())) is not None:
+                tags[u] = [x["tag_type"] for x in t]
+    return tags
+
+
 def refresh_all_registrations():
+    regs = get_all_registrations()
     with ThreadPoolExecutor(REFRESH_WORKERS) as pool:
-        list(pool.map(refresh_one, get_all_registrations()))
+        list(pool.map(refresh_one, regs))
+    if URCHIN_KEY:
+        try:
+            set_tags(fetch_cheater_tags([r["uuid"] for r in regs]))
+        except Exception as e:
+            print(f"⚠️ チータータグの取得に失敗: {e}")
 
 
 @functools.lru_cache(maxsize=1024)
@@ -800,8 +824,9 @@ def build_board_files(kind: str) -> list[discord.File]:
         page = rows[start:start + BOARD_PAGE]
         names = [r["mcid"] for r in page]
         title = f"{label} Ranking" + (f"  #{start + 1}-{start + len(page)}" if len(rows) > BOARD_PAGE else "")
-        buf = build_leaderboard_card(title, names, heads[start:start + BOARD_PAGE], [fmt(r) for r in page], start=start, cols=1, background=background)
-        alt = f"{label} ランキング: " + ", ".join(f"{start + i + 1}. {n} {fmt(r)}" for i, (n, r) in enumerate(zip(names, page)))
+        buf = build_leaderboard_card(title, names, heads[start:start + BOARD_PAGE], [fmt(r) for r in page], start=start, cols=1, background=background,
+                                    marks=[bool(r["tags"]) for r in page])
+        alt = f"{label} ランキング: " + ", ".join(f"{start + i + 1}. {n}{' ⚠チーター' if r['tags'] else ''} {fmt(r)}" for i, (n, r) in enumerate(zip(names, page)))
         files.append(discord.File(buf, filename=f"ranking_{kind}_{start // BOARD_PAGE + 1}.png", description=alt[:1000]))
     return files
 

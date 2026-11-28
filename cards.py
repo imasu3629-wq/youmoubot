@@ -322,8 +322,8 @@ def build_compare_card(players, fields, mode_label, heads=(None, None)) -> io.By
 
 
 # --- /leaderboard ---
-def build_leaderboard_card(title, names, heads, values=None, start=0, cols=None, background=None) -> io.BytesIO:
-    """start は最初の行の順位-1（2枚目以降は 25 など）。"""
+def build_leaderboard_card(title, names, heads, values=None, start=0, cols=None, background=None, marks=None) -> io.BytesIO:
+    """start は最初の行の順位-1（2枚目以降は 25 など）。marks[i] が真ならIGNの横にチーターの印を付ける。"""
     n = len(names)
     cols = cols or (1 if n <= 10 else 2)
     per_col = -(-n // cols) if n else 1
@@ -352,6 +352,9 @@ def build_leaderboard_card(title, names, heads, values=None, start=0, cols=None,
         if heads[i]:
             paste_rounded(img, heads[i], (x + 88, y + 8), 40, radius=6)
         d.text((x + 146, cy), name, font=font("SemiBold", 27), fill=WHITE, anchor="lm")
+        if marks and marks[i]:
+            mx = x + 146 + d.textlength(name, font=font("SemiBold", 27)) + 12
+            d.text((mx, cy), "\u26a0", font=symbol_font(32), fill=(255, 70, 70), anchor="lm")
         if values:
             d.text((x + cw - 24, cy), values[i], font=font("Bold", 27), fill=MEDALS[rank] if rank < 3 else WHITE, anchor="rm")
     if not names:
