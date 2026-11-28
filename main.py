@@ -21,6 +21,7 @@ from bedwars import MODES, LEADERBOARDS, COMPARE_FIELDS, extract_bw_stats, find_
 from cards import build_compare_card, build_leaderboard_card, fetch_head
 from bwcard_bot import CardView, SettingsView, load_card_data
 import ai
+import tickets
 
 # --- 24時間稼働設定 ---
 app = Flask('')
@@ -291,6 +292,9 @@ def build_ranking_embed(rows, mode: str):
 @bot.event
 async def on_ready():
     init_db()
+    bot.add_view(RegisterPanelView())
+    bot.add_view(tickets.TicketPanelView())
+    bot.add_view(tickets.TicketCloseView())
     if not update_ranking_boards.is_running():
         update_ranking_boards.start()
     try:
@@ -305,6 +309,27 @@ async def on_ready():
 @tree.command(name="register", description="MCIDを登録してBedwars戦績を記録します")
 async def register(interaction: discord.Interaction, mcid: str):
     await interaction.response.defer(ephemeral=True)
+    await do_register(interaction, mcid)
+
+
+class RegisterModal(discord.ui.Modal, title="MCIDを登録"):
+    mcid = discord.ui.TextInput(label="MCID", placeholder="例: Wlnks", min_length=3, max_length=16)
+
+    async def on_submit(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True)
+        await do_register(interaction, self.mcid.value.strip())
+
+
+class RegisterPanelView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=None)
+
+    @discord.ui.button(label="MCIDを登録", emoji="📝", style=discord.ButtonStyle.success, custom_id="register:open")
+    async def open_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.send_modal(RegisterModal())
+
+
+async def do_register(interaction: discord.Interaction, mcid: str):
     try:
         profile = fetch_player_profile(mcid)
         if not profile:
