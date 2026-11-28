@@ -6,6 +6,8 @@ import requests
 import asyncio
 import time
 import datetime
+import functools
+from concurrent.futures import ThreadPoolExecutor
 from bs4 import BeautifulSoup
 import os
 from pathlib import Path
@@ -763,42 +765,61 @@ def save_boards(boards: dict):
     os.replace(BOARDS_FILE + ".tmp", BOARDS_FILE)
 
 
+REFRESH_WORKERS = 8
+BOARD_SIZE, BOARD_PAGE = 100, 25
+
+
+def refresh_one(r):
+    try:
+        s = fetch_ranking_stats(r["uuid"])
+        if s:
+            update_stats(r["uuid"], fetch_current_name(r["uuid"]) or r["mcid"], *s)
+    except Exception as e:
+        print(f"⚠️ {r['mcid']} の更新に失敗: {e}")
+
+
 def refresh_all_registrations():
-    for r in get_all_registrations():
-        try:
-            s = fetch_ranking_stats(r["uuid"])
-            if s:
-                update_stats(r["uuid"], fetch_current_name(r["uuid"]) or r["mcid"], *s)
-        except (requests.RequestException, ValueError) as e:
-            print(f"⚠️ {r['mcid']} の更新に失敗: {e}")
-        time.sleep(1)
+    with ThreadPoolExecutor(REFRESH_WORKERS) as pool:
+        list(pool.map(refresh_one, get_all_registrations()))
 
 
-def build_board_file(kind: str) -> discord.File:
+@functools.lru_cache(maxsize=1024)
+def cached_head(uuid: str):
+    return fetch_head(uuid, 64)
+
+
+def build_board_files(kind: str) -> list[discord.File]:
+    """上位100人を25人ずつの画像に分ける。"""
     label, fmt = RANKING_BOARDS[kind]
-    rows = get_ranking(kind, 10)
-    names = [r["mcid"] for r in rows]
-    heads = [fetch_head(r["uuid"], 64) for r in rows]
-    buf = build_leaderboard_card(f"{label} Ranking", names, heads, [fmt(r) for r in rows])
-    alt = f"{label} ランキング: " + ", ".join(f"{i + 1}. {n} {fmt(r)}" for i, (n, r) in enumerate(zip(names, rows)))
-    return discord.File(buf, filename=f"ranking_{kind}.png", description=alt[:1000])
+    rows = get_ranking(kind, BOARD_SIZE)
+    with ThreadPoolExecutor(REFRESH_WORKERS) as pool:
+        heads = list(pool.map(cached_head, [r["uuid"] for r in rows]))
+    files = []
+    for start in range(0, max(len(rows), 1), BOARD_PAGE):
+        page = rows[start:start + BOARD_PAGE]
+        names = [r["mcid"] for r in page]
+        title = f"{label} Ranking" + (f"  #{start + 1}-{start + len(page)}" if len(rows) > BOARD_PAGE else "")
+        buf = build_leaderboard_card(title, names, heads[start:start + BOARD_PAGE], [fmt(r) for r in page], start=start, cols=1)
+        alt = f"{label} ランキング: " + ", ".join(f"{start + i + 1}. {n} {fmt(r)}" for i, (n, r) in enumerate(zip(names, page)))
+        files.append(discord.File(buf, filename=f"ranking_{kind}_{start // BOARD_PAGE + 1}.png", description=alt[:1000]))
+    return files
 
 
 async def post_board(entry: dict) -> bool:
     """ランキングを投稿、または前の投稿を書き換える。投稿IDが変わったら True。"""
     kind = entry["kind"]
     channel = bot.get_channel(entry["channel"]) or await bot.fetch_channel(entry["channel"])
-    file = await asyncio.to_thread(build_board_file, kind)
+    files = await asyncio.to_thread(build_board_files, kind)
     content = f"🕐 最終更新: <t:{int(time.time())}:R>（毎日0時・日本時間に自動更新）"
     if kind.startswith("m_"):
         content += f"\n📅 {current_month()} の記録（毎月1日にリセット）"
     if entry.get("message"):
         try:
-            await channel.get_partial_message(entry["message"]).edit(content=content, attachments=[file])
+            await channel.get_partial_message(entry["message"]).edit(content=content, attachments=files)
             return False
         except discord.NotFound:
-            file = await asyncio.to_thread(build_board_file, kind)
-    entry["message"] = (await channel.send(content, file=file)).id
+            files = await asyncio.to_thread(build_board_files, kind)
+    entry["message"] = (await channel.send(content, files=files)).id
     return True
 
 
@@ -831,6 +852,7 @@ async def run_ranking_update(guild_id: int | None = None):
     """登録者の戦績を取り直し、ランキング投稿を更新する。guild_id を渡すとそのサーバーの投稿だけ。"""
     if guild_id is None and not load_boards():
         return
+    cached_head.cache_clear()
     await asyncio.to_thread(refresh_all_registrations)
     async with boards_lock:
         boards = load_boards()
