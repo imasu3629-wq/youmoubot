@@ -146,7 +146,7 @@ class SettingsView(discord.ui.View):
     def summary(self) -> str:
         on = settings.show(self.user_id)
         off = [USER_SECTIONS[k].split("（")[0] for k in USER_SECTIONS if k not in on]
-        text = f"表示中：{len(on)} / {len(USER_SECTIONS)} 項目"
+        text = f"表示中：{len(on)} / {len(USER_SECTIONS)} 項目（スタンダードのデザインだけに効きます）"
         return text + (f"\n非表示：{'、'.join(off)}" if off else "")
 
     async def saved(self, interaction: discord.Interaction):
