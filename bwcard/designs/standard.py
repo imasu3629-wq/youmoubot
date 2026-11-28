@@ -106,10 +106,10 @@ def draw_grid(c: Card, m, rows, x, y, w, h):
             cx, cy = x + col * (cw + CELL_GAP), y + r * (ch + CELL_GAP)
             panel(c, cx, cy, cw, ch)
             top = cy + (ch - 62) / 2          # セルが高くなっても中身は真ん中に
-            c.mc(label, cx + cw / 2, top + 12, 2, anchor="m", default=LABEL[color])
+            c.mc(label, cx + cw / 2, top + 8, 2, anchor="m", default=LABEL[color])
             text = (C.r2(value) if value < 1000 else C.r_short(value)) if isinstance(value, float) else C.n(value)
             u = c.mc_fit(text, cw - 24, (4, 3.5, 3))
-            c.mc(f"§{color}{text}", cx + cw / 2, top + 35 + (4 - u) * 3.5, u, anchor="m")
+            c.mc(f"§{color}{text}", cx + cw / 2, top + 29 + (4 - u) * 3.5, u, anchor="m")
 
 
 def draw_games(c: Card, stats: PlayerStats, mode, x, y, w, h):
