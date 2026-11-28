@@ -642,6 +642,8 @@ async def on_message(message: discord.Message):
 async def aichannel(interaction: discord.Interaction):
     on = ai.channels.toggle(interaction.channel_id)
     msg = "✅ このチャンネルでAIが返事するようにしました。" if on else "⏹️ このチャンネルでのAIの返事を止めました。"
+    if on and not ai.DEEPSEEK_KEY:
+        msg += "\n⚠️ DEEPSEEK_API_KEY が設定されていないので、今は返事しません。"
     await interaction.response.send_message(msg, ephemeral=True)
 
 
