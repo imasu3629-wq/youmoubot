@@ -94,16 +94,42 @@ async def open_ticket(interaction: discord.Interaction):
 
 async def close_ticket(interaction: discord.Interaction):
     guild, channel = interaction.guild, interaction.channel
-    async with lock:
-        state = load_state()
-        ticket = state.get(str(guild.id), {}).get("open", {}).pop(str(channel.id), None)
-        if ticket:
-            save_state(state)
+    ticket = load_state().get(str(guild.id), {}).get("open", {}).get(str(channel.id))
     if not ticket:
         await interaction.response.send_message("⚠️ このチャンネルはチケットではありません。", ephemeral=True)
         return
     await interaction.response.send_message("🔒 チケットを閉じます…")
-    role = guild.get_role(ticket["role"])
-    if role:
-        await role.delete(reason=f"ticket-{ticket['number']} を閉じた")
-    await channel.delete(reason=f"{interaction.user} がチケットを閉じた")
+    try:
+        role = guild.get_role(ticket["role"])
+        if role:
+            await role.delete(reason=f"ticket-{ticket['number']} を閉じた")
+        await channel.delete(reason=f"{interaction.user} がチケットを閉じた")
+    except discord.NotFound:
+        pass
+    except discord.HTTPException as e:
+        await interaction.followup.send(f"⚠️ 閉じられませんでした: {e}")
+        return
+    async with lock:
+        state = load_state()
+        state.get(str(guild.id), {}).get("open", {}).pop(str(channel.id), None)
+        save_state(state)
+
+
+PANELS = {
+    "register": (
+        "📝 MCID登録",
+        "下のボタンを押してMCIDを入力すると登録できます。\n"
+        "登録した人は、ランキングチャンネル（FKDR・Star・Win・Final Kill）に1時間ごとに反映されます。",
+        0x2ECC71,
+    ),
+    "ticket": (
+        "🎫 チケット",
+        "お問い合わせは下のボタンを押してください。\nあなたと管理者だけが見られる専用チャンネルが作られます。",
+        0x5865F2,
+    ),
+}
+
+
+def panel_embed(kind: str) -> discord.Embed:
+    title, description, color = PANELS[kind]
+    return discord.Embed(title=title, description=description, color=color)
