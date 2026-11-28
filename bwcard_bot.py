@@ -1,10 +1,12 @@
 """bwcard の統計カードを Aurora のデータで出すための部品（/bwstats と /bwsettings 用）。"""
+from __future__ import annotations
 import asyncio
 import base64
 import io
 import json
 import os
 import random
+import time
 from pathlib import Path
 
 import discord
@@ -20,11 +22,13 @@ BACKGROUND_DIR = Path(os.environ.get("BACKGROUND_DIR", "backgrounds"))
 CARD_BACKGROUND = os.environ.get("CARD_BACKGROUND", "random")
 SETTINGS_FILE = Path(os.environ.get("SETTINGS_FILE", "settings.json"))
 SESSION_URL = "https://sessionserver.mojang.com/session/minecraft/profile/{uuid}"
+SNAPSHOT_URL = "https://api.bordic.xyz/v3/player/snapshot"
+AURORA_KEY = os.environ.get("AURORA_API_KEY", "")
 
-# Aurora のキャッシュに無いデータの部品は出さない
+# Aurora のキャッシュに無いデータの部品は出さない（キーで snapshot が取れたときは全部出す）
 AURORA_MISSING = {"games", "resources"}
 OVERALL_ONLY = {"kills", "deaths", "kdr", "beds_broken", "beds_lost", "bblr"}
-PART_CHOICES = {k: v for k, v in PART_SECTIONS.items() if k not in AURORA_MISSING}
+PART_CHOICES = PART_SECTIONS if AURORA_KEY else {k: v for k, v in PART_SECTIONS.items() if k not in AURORA_MISSING}
 USER_SECTIONS = {**STAT_SECTIONS, **PART_CHOICES}
 
 
@@ -47,18 +51,34 @@ def fetch_skin(uuid: str):
         return None, False
 
 
+def fetch_snapshot(uuid: str) -> dict | None:
+    """Aurora の snapshot（Hypixel 形式の Bedwars 全項目）。キーが無いか取れないときは None。"""
+    if not AURORA_KEY:
+        return None
+    try:
+        res = requests.get(SNAPSHOT_URL, params={"uuid": uuid.replace("-", ""), "t": int(time.time() * 1000),
+                                                 "key": AURORA_KEY}, timeout=10)
+        data = res.json() if res.status_code == 200 else {}
+    except (requests.RequestException, ValueError):
+        return None
+    return data.get("snapshot") or None
+
+
 def load_card_data(player: dict, uuid: str):
-    """Aurora の player から (PlayerStats, スキン, 細腕か) を作る。"""
+    """Aurora の player から (PlayerStats, スキン, 細腕か, 全項目あるか) を作る。"""
     player = dict(player)
     stats = dict(player.get("stats") or {})
     bw = dict(stats.get("Bedwars") or {})
+    snapshot = fetch_snapshot(uuid)
+    if snapshot:
+        bw.update({k: v for k, v in snapshot.items() if v is not None})
     if not bw.get("Experience"):
         bw["Experience"] = level_to_exp((player.get("achievements") or {}).get("bedwars_level") or 0)
     stats["Bedwars"] = bw
     player["stats"] = stats
     player.setdefault("uuid", uuid)
     skin, slim = fetch_skin(uuid)
-    return parse_player(player), skin, slim
+    return parse_player(player), skin, slim, bool(snapshot)
 
 
 class Settings:
@@ -96,8 +116,9 @@ def pick_background():
 
 
 async def make_file(data, mode: str, show, background) -> discord.File:
-    stats, skin, slim = data
-    show = set(show) - AURORA_MISSING - (OVERALL_ONLY if mode != "overall" else set())
+    stats, skin, slim, full = data
+    if not full:
+        show = set(show) - AURORA_MISSING - (OVERALL_ONLY if mode != "overall" else set())
     bg = Image.open(background) if isinstance(background, Path) else background
     buf = await asyncio.to_thread(render_card, stats, "standard", mode, skin=skin, slim=slim,
                                   background=bg, footer=FOOTER, show=show)
