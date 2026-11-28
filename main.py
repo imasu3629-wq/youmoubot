@@ -517,11 +517,11 @@ def fetch_player_with_stats(mcid: str, mode: str):
     return profile, player, None
 
 
-# --- /bwstats ---
-@tree.command(name="bwstats", description="Bedwarsの詳細戦績を表示します")
+# --- /bw ---
+@tree.command(name="bw", description="Bedwarsの詳細戦績を表示します")
 @app_commands.describe(mcid="MCID", mode="モード（省略時は総合）")
 @app_commands.choices(mode=MODE_CHOICES)
-async def bwstats(interaction: discord.Interaction, mcid: str, mode: app_commands.Choice[str] = None):
+async def bw(interaction: discord.Interaction, mcid: str, mode: app_commands.Choice[str] = None):
     await interaction.response.defer()
     mode_key = mode.value if mode else "overall"
     try:
@@ -536,7 +536,7 @@ async def bwstats(interaction: discord.Interaction, mcid: str, mode: app_command
         await interaction.followup.send(f"⚠️ エラー: {e}")
 
 
-@tree.command(name="bwsettings", description="/bwstats のカードに表示する項目を選びます")
+@tree.command(name="bwsettings", description="/bw のカードに表示する項目を選びます")
 async def bwsettings(interaction: discord.Interaction):
     sv = SettingsView(interaction.user.id)
     await interaction.response.send_message(sv.summary(), view=sv, ephemeral=True)

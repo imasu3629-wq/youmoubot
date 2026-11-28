@@ -1,4 +1,4 @@
-"""bwcard の統計カードを Aurora のデータで出すための部品（/bwstats と /bwsettings 用）。"""
+"""bwcard の統計カードを Aurora のデータで出すための部品（/bw と /bwsettings 用）。"""
 from __future__ import annotations
 import asyncio
 import base64

@@ -200,7 +200,7 @@ def to_png(img) -> io.BytesIO:
     return buf
 
 
-# --- /bwstats ---
+# --- /bw ---
 def stat_tiles(s):
     ws = s["winstreak"]
     ws_tile = ("WINSTREAK", "?" if ws is None else fmt(ws), "hidden" if ws is None else "estimated", WHITE if ws is None else winstreak_color(ws))
