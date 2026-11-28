@@ -7,6 +7,7 @@ import asyncio
 import time
 from bs4 import BeautifulSoup
 import os
+from pathlib import Path
 import io
 from PIL import Image, ImageDraw, ImageFont
 from flask import Flask
@@ -307,44 +308,84 @@ async def on_ready():
 
 
 # --- /register ---
-@tree.command(name="register", description="MCIDを登録してBedwars戦績を記録します")
+@tree.command(name="register", description="MCIDを登録してBedwars戦績を記録します（管理者用）")
+@app_commands.default_permissions(administrator=True)
 async def register(interaction: discord.Interaction, mcid: str):
     await interaction.response.defer(ephemeral=True)
     await do_register(interaction, mcid)
 
 
+async def register_mcid(mcid: str, discord_id: int):
+    """MCIDを登録する。成功なら登録完了の Embed、失敗ならエラー文を返す。"""
+    profile = await asyncio.to_thread(fetch_player_profile, mcid)
+    if not profile:
+        return "❌ プレイヤーが見つかりません。MCIDを確認してください。"
+    uuid = profile["uuid"]
+    official_mcid = profile["name"]
+    if is_registered(uuid):
+        return f"⚠️ `{official_mcid}` はすでに登録されています。"
+    s = await asyncio.to_thread(fetch_ranking_stats, uuid)
+    if s is None:
+        return "❌ Hypixelからデータを取得できませんでした。"
+    star, fkdr, _, _ = s
+    if not register_player(uuid, official_mcid, discord_id, *s):
+        return f"⚠️ `{official_mcid}` はすでに登録されています。"
+    embed = discord.Embed(title="✅ 登録完了", color=0x2ecc71)
+    embed.add_field(name="MCID", value=official_mcid, inline=True)
+    embed.add_field(name="⭐ Star", value=str(star), inline=True)
+    embed.add_field(name="⚔️ FKDR", value=str(fkdr), inline=True)
+    embed.set_footer(text="ランキングに反映されました")
+    return embed
+
+
 async def do_register(interaction: discord.Interaction, mcid: str):
     try:
-        profile = fetch_player_profile(mcid)
-        if not profile:
-            await interaction.followup.send("❌ プレイヤーが見つかりません。MCIDを確認してください。", ephemeral=True)
-            return
-
-        uuid = profile["uuid"]
-        official_mcid = profile["name"]
-
-        if is_registered(uuid):
-            await interaction.followup.send(f"⚠️ `{official_mcid}` はすでに登録されています。", ephemeral=True)
-            return
-
-        s = await asyncio.to_thread(fetch_ranking_stats, uuid)
-        if s is None:
-            await interaction.followup.send("❌ Hypixelからデータを取得できませんでした。", ephemeral=True)
-            return
-        star, fkdr, _, _ = s
-
-        if not register_player(uuid, official_mcid, interaction.user.id, *s):
-            await interaction.followup.send(f"⚠️ `{official_mcid}` はすでに登録されています。", ephemeral=True)
-            return
-
-        embed = discord.Embed(title="✅ 登録完了", color=0x2ecc71)
-        embed.add_field(name="MCID", value=official_mcid, inline=True)
-        embed.add_field(name="⭐ Star", value=str(star), inline=True)
-        embed.add_field(name="⚔️ FKDR", value=str(fkdr), inline=True)
-        embed.set_footer(text="ランキングに反映されました")
-        await interaction.followup.send(embed=embed, ephemeral=True)
+        result = await register_mcid(mcid, interaction.user.id)
     except Exception as e:
-        await interaction.followup.send(f"⚠️ エラーが発生しました: {e}", ephemeral=True)
+        result = f"⚠️ エラーが発生しました: {e}"
+    if isinstance(result, discord.Embed):
+        await interaction.followup.send(embed=result, ephemeral=True)
+    else:
+        await interaction.followup.send(result, ephemeral=True)
+
+
+# --- MCID申請チャンネル（管理者が ✅ を付けたら登録） ---
+APPROVE_EMOJI = "✅"
+approval_channels = ai.Channels(Path(os.path.abspath(__file__)).with_name("approval_channels.json"))
+
+
+@bot.event
+async def on_raw_reaction_add(payload: discord.RawReactionActionEvent):
+    if (str(payload.emoji) != APPROVE_EMOJI or payload.channel_id not in approval_channels.ids
+            or not payload.member or payload.member.bot
+            or not payload.member.guild_permissions.administrator):
+        return
+    channel = bot.get_channel(payload.channel_id) or await bot.fetch_channel(payload.channel_id)
+    try:
+        message = await channel.fetch_message(payload.message_id)
+    except discord.HTTPException:
+        return
+    words = message.content.split()
+    if message.author.bot or not words:
+        return
+    try:
+        result = await register_mcid(words[0], message.author.id)
+    except Exception as e:
+        result = f"⚠️ エラーが発生しました: {e}"
+    if isinstance(result, discord.Embed):
+        await message.reply(embed=result, mention_author=False)
+    else:
+        await message.reply(result, mention_author=False)
+
+
+@tree.command(name="approvalchannel", description="このチャンネルをMCID申請チャンネルにするかを切り替えます")
+@app_commands.default_permissions(administrator=True)
+@app_commands.guild_only()
+async def approvalchannel(interaction: discord.Interaction):
+    on = approval_channels.toggle(interaction.channel_id)
+    msg = (f"✅ このチャンネルをMCID申請チャンネルにしました。送られたMCIDに管理者が {APPROVE_EMOJI} を付けると登録します。"
+           if on else "⏹️ このチャンネルのMCID申請を止めました。")
+    await interaction.response.send_message(msg, ephemeral=True)
 
 
 # --- /registered ---
@@ -727,7 +768,7 @@ async def post_board(entry: dict) -> bool:
     kind = entry["kind"]
     channel = bot.get_channel(entry["channel"]) or await bot.fetch_channel(entry["channel"])
     file = await asyncio.to_thread(build_board_file, kind)
-    content = f"🕐 最終更新: <t:{int(time.time())}:R>（1時間ごとに自動更新・ `/register` で参加）"
+    content = f"🕐 最終更新: <t:{int(time.time())}:R>（1時間ごとに自動更新）"
     if entry.get("message"):
         try:
             await channel.get_partial_message(entry["message"]).edit(content=content, attachments=[file])
