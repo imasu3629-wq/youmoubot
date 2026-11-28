@@ -535,6 +535,9 @@ def fetch_player_with_stats(mcid: str, mode: str):
     return profile, player, None
 
 
+ai.lookup_player = fetch_player_with_stats
+
+
 # --- /bw ---
 @tree.command(name="bw", description="Bedwarsの詳細戦績を表示します")
 @app_commands.describe(mcid="MCID", mode="モード（省略時は総合）")
