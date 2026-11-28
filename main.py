@@ -380,10 +380,14 @@ async def on_raw_reaction_add(payload: discord.RawReactionActionEvent):
             result = await register_mcid(words[0], message.author.id)
         except Exception as e:
             result = f"⚠️ エラーが発生しました: {e}"
-    if isinstance(result, discord.Embed):
-        await message.add_reaction(REGISTERED_EMOJI)
-    else:
-        await message.add_reaction("❌")
+    ok = isinstance(result, discord.Embed)
+    try:
+        await message.add_reaction(REGISTERED_EMOJI if ok else "❌")
+    except discord.HTTPException:
+        if ok:
+            await message.reply(embed=result, mention_author=False)
+            return
+    if not ok:
         await message.reply(result, mention_author=False)
 
 
