@@ -47,6 +47,7 @@ class Channels:
 
 channels = Channels(CHANNELS_FILE)
 _last_reply: dict[int, float] = {}
+_judging: set[int] = set()
 
 
 def jev_should_reply(state: dict) -> bool:
@@ -97,21 +98,32 @@ async def handle_message(bot: discord.Client, message: discord.Message):
         return
     if not DEEPSEEK_KEY:
         return
-    now, prev = time.monotonic(), _last_reply.get(message.author.id, 0)
-    if now - prev < USER_COOLDOWN:
+    uid, mentioned = message.author.id, bot.user in message.mentions
+    cooling = lambda: time.monotonic() - _last_reply.get(uid, 0) < USER_COOLDOWN  # noqa: E731
+    if cooling() or (not mentioned and uid in _judging):
         return
-    _last_reply[message.author.id] = now
-
-    history = [m async for m in message.channel.history(limit=HISTORY, before=message)][::-1]
-    mentioned = bot.user in message.mentions
+    if mentioned:
+        _last_reply[uid] = time.monotonic()
+    else:
+        _judging.add(uid)
+    try:
+        history = [m async for m in message.channel.history(limit=HISTORY, before=message)][::-1]
+    except discord.HTTPException:
+        _judging.discard(uid)
+        raise
     state = {
         "bot_name": bot.user.display_name,
         "recent_messages": [f"{m.author.display_name}: {m.clean_content}" for m in history],
         "new_message": f"{message.author.display_name}: {message.clean_content}",
     }
-    if not mentioned and not await asyncio.to_thread(jev_should_reply, state):
-        _last_reply[message.author.id] = prev
-        return
+    if not mentioned:
+        try:
+            reply = await asyncio.to_thread(jev_should_reply, state)
+        finally:
+            _judging.discard(uid)
+        if not reply or cooling():
+            return
+        _last_reply[uid] = time.monotonic()
 
     convo = [
         {"role": "assistant", "content": m.clean_content} if m.author == bot.user
