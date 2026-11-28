@@ -18,6 +18,7 @@ from database import (
 from bedwars import MODES, LEADERBOARDS, COMPARE_FIELDS, extract_bw_stats, find_leaderboard
 from cards import build_compare_card, build_leaderboard_card, fetch_head
 from bwcard_bot import CardView, SettingsView, load_card_data
+import ai
 
 # --- 24時間稼働設定 ---
 app = Flask('')
@@ -38,6 +39,7 @@ current_api_key = os.environ.get('HYPIXEL_KEY', '')
 AUTHORIZED_USERS = [1278574483195559977]
 
 intents = discord.Intents.default()
+intents.message_content = True
 bot = discord.Client(intents=intents)
 tree = app_commands.CommandTree(bot)
 
@@ -626,6 +628,21 @@ async def leaderboard(interaction: discord.Interaction, category: app_commands.C
         await interaction.followup.send(file=discord.File(buf, filename="leaderboard.png", description=alt[:1000]))
     except Exception as e:
         await interaction.followup.send(f"⚠️ エラー: {e}")
+
+
+# --- AIチャンネル ---
+@bot.event
+async def on_message(message: discord.Message):
+    await ai.handle_message(bot, message)
+
+
+@tree.command(name="aichannel", description="このチャンネルでAIが返事するかを切り替えます")
+@app_commands.default_permissions(manage_channels=True)
+@app_commands.guild_only()
+async def aichannel(interaction: discord.Interaction):
+    on = ai.channels.toggle(interaction.channel_id)
+    msg = "✅ このチャンネルでAIが返事するようにしました。" if on else "⏹️ このチャンネルでのAIの返事を止めました。"
+    await interaction.response.send_message(msg, ephemeral=True)
 
 
 # --- /setkey（既存） ---
