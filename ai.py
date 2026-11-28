@@ -108,7 +108,7 @@ async def handle_message(bot: discord.Client, message: discord.Message):
         _judging.add(uid)
     try:
         history = [m async for m in message.channel.history(limit=HISTORY, before=message)][::-1]
-    except discord.HTTPException:
+    except BaseException:
         _judging.discard(uid)
         raise
     state = {
