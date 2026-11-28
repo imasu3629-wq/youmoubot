@@ -843,7 +843,7 @@ async def post_new_boards():
             if not entry.get("message"):
                 try:
                     changed |= await post_board(entry)
-                except discord.HTTPException as e:
+                except Exception as e:
                     print(f"⚠️ {key} ランキングの投稿に失敗: {e}")
         if changed:
             save_boards(boards)
@@ -863,7 +863,7 @@ async def run_ranking_update(guild_id: int | None = None):
                 continue
             try:
                 changed |= await post_board(entry)
-            except discord.HTTPException as e:
+            except Exception as e:
                 print(f"⚠️ {key} ランキングの投稿に失敗: {e}")
         if changed:
             save_boards(boards)
@@ -885,7 +885,7 @@ async def rankingchannel(interaction: discord.Interaction, kind: app_commands.Ch
             entry["message"] = old.get("message")
         try:
             await post_board(entry)
-        except discord.HTTPException as e:
+        except Exception as e:
             await interaction.followup.send(f"⚠️ 投稿できませんでした: {e}", ephemeral=True)
             return
         if old.get("message") and old.get("message") != entry["message"]:
