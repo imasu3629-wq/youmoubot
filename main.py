@@ -674,10 +674,11 @@ RANKING_BOARDS = {
     "final_kills": ("Final Kills", lambda r: f"{r['final_kills']:,}"),
 }
 BOARDS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "ranking_channels.json")
+boards_lock = asyncio.Lock()
 
 
 def load_boards() -> dict:
-    """{種類: {"channel": チャンネルID, "message": 投稿ID}}"""
+    """{"サーバーID:種類": {"kind": 種類, "channel": チャンネルID, "message": 投稿ID}}"""
     try:
         with open(BOARDS_FILE, encoding="utf-8") as f:
             return json.load(f)
@@ -712,8 +713,9 @@ def build_board_file(kind: str) -> discord.File:
     return discord.File(buf, filename=f"ranking_{kind}.png", description=alt[:1000])
 
 
-async def post_board(kind: str, entry: dict) -> bool:
+async def post_board(entry: dict) -> bool:
     """ランキングを投稿、または前の投稿を書き換える。投稿IDが変わったら True。"""
+    kind = entry["kind"]
     channel = bot.get_channel(entry["channel"]) or await bot.fetch_channel(entry["channel"])
     file = await asyncio.to_thread(build_board_file, kind)
     content = f"🕐 最終更新: <t:{int(time.time())}:R>（1時間ごとに自動更新・ `/register` で参加）"
@@ -729,18 +731,19 @@ async def post_board(kind: str, entry: dict) -> bool:
 
 @tasks.loop(hours=1)
 async def update_ranking_boards():
-    boards = load_boards()
-    if not boards:
+    if not load_boards():
         return
     await asyncio.to_thread(refresh_all_registrations)
-    changed = False
-    for kind, entry in boards.items():
-        try:
-            changed |= await post_board(kind, entry)
-        except discord.HTTPException as e:
-            print(f"⚠️ {kind} ランキングの投稿に失敗: {e}")
-    if changed:
-        save_boards(boards)
+    async with boards_lock:
+        boards = load_boards()
+        changed = False
+        for key, entry in boards.items():
+            try:
+                changed |= await post_board(entry)
+            except discord.HTTPException as e:
+                print(f"⚠️ {key} ランキングの投稿に失敗: {e}")
+        if changed:
+            save_boards(boards)
 
 
 @tree.command(name="rankingchannel", description="このチャンネルに自動更新ランキングを投稿します")
@@ -750,14 +753,25 @@ async def update_ranking_boards():
 @app_commands.guild_only()
 async def rankingchannel(interaction: discord.Interaction, kind: app_commands.Choice[str]):
     await interaction.response.defer(ephemeral=True)
-    boards = load_boards()
-    boards[kind.value] = {"channel": interaction.channel_id}
-    try:
-        await post_board(kind.value, boards[kind.value])
-    except discord.HTTPException as e:
-        await interaction.followup.send(f"⚠️ 投稿できませんでした: {e}", ephemeral=True)
-        return
-    save_boards(boards)
+    key = f"{interaction.guild_id}:{kind.value}"
+    async with boards_lock:
+        boards = load_boards()
+        old = boards.get(key) or {}
+        entry = {"kind": kind.value, "channel": interaction.channel_id}
+        if old.get("channel") == interaction.channel_id:
+            entry["message"] = old.get("message")
+        try:
+            await post_board(entry)
+        except discord.HTTPException as e:
+            await interaction.followup.send(f"⚠️ 投稿できませんでした: {e}", ephemeral=True)
+            return
+        if old.get("message") and old.get("message") != entry["message"]:
+            try:
+                await bot.get_partial_messageable(old["channel"]).get_partial_message(old["message"]).delete()
+            except discord.HTTPException:
+                pass
+        boards[key] = entry
+        save_boards(boards)
     await interaction.followup.send(f"✅ このチャンネルに {kind.name} ランキングを投稿しました。1時間ごとに更新します。", ephemeral=True)
 
 
