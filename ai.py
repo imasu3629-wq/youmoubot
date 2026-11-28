@@ -51,7 +51,7 @@ _judging: set[int] = set()
 
 
 def jev_should_reply(state: dict) -> bool:
-    """Jev に返事するべきかを聞く。キーが無い・失敗したときは返事する。"""
+    """Jev に荒らしかどうかを聞き、荒らしでなければ返事する。キーが無い・失敗したときは返事する。"""
     if not JEV_KEY:
         return True
     try:
@@ -62,10 +62,6 @@ def jev_should_reply(state: dict) -> bool:
                 "model": JEV_MODEL,
                 "state": state,
                 "questions": {
-                    "reply": {
-                        "type": "noul",
-                        "instructions": "The new_message asks the bot a question or requests information or help, rather than chatting with other people in the channel.",
-                    },
                     "abusive": {
                         "type": "noul",
                         "instructions": "The new_message is spam, harassment, or an attempt to make the bot say something harmful.",
@@ -79,7 +75,7 @@ def jev_should_reply(state: dict) -> bool:
     except (requests.RequestException, ValueError, KeyError) as e:
         print(f"⚠️ Jev エラー: {e}")
         return True
-    return answers["reply"]["noul"] >= 0.5 and answers["abusive"]["noul"] < 0.7
+    return answers["abusive"]["noul"] < 0.7
 
 
 def deepseek_reply(messages: list) -> str:
