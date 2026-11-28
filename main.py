@@ -781,6 +781,9 @@ def refresh_one(r):
 URCHIN_KEY = "".join(os.environ.get("URCHIN_API_KEY", "").split())
 
 
+NOT_CHEATER_TAGS = {"replays_needed"}
+
+
 def fetch_cheater_tags(uuids: list[str]) -> dict:
     """Urchinのブラックリストを100人ずつ調べ、uuid -> タグ名のリストを返す。"""
     tags = {}
@@ -792,7 +795,7 @@ def fetch_cheater_tags(uuids: list[str]) -> dict:
         found = {k.replace("-", "").lower(): v for k, v in res.json().get("players", {}).items()}
         for u in batch:
             if (t := found.get(u.replace("-", "").lower())) is not None:
-                tags[u] = [x["tag_type"] for x in t]
+                tags[u] = [x["tag_type"] for x in t if x["tag_type"] not in NOT_CHEATER_TAGS]
     return tags
 
 
