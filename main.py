@@ -1,5 +1,7 @@
 import discord
 from discord import app_commands
+from discord.ext import tasks
+import json
 import requests
 import asyncio
 import time
@@ -13,7 +15,7 @@ from database import (
     init_db, get_cached_uuid, save_uuid_cache,
     register_player, update_stats, is_registered, is_registered_by_discord,
     get_registered_by_discord, get_ranking_by_fkdr, get_ranking_by_star,
-    delete_player
+    delete_player, get_all_registrations, get_ranking
 )
 from bedwars import MODES, LEADERBOARDS, COMPARE_FIELDS, extract_bw_stats, find_leaderboard
 from cards import build_compare_card, build_leaderboard_card, fetch_head
@@ -152,6 +154,15 @@ def fetch_hypixel_stats(uuid: str):
     return star, fkdr, rank_label
 
 
+def fetch_ranking_stats(uuid: str):
+    """ランキング用の (star, fkdr, wins, final_kills)。データが無いときは None。"""
+    p = fetch_hypixel_player(uuid)
+    if not p:
+        return None
+    s = extract_bw_stats(p)
+    return s["star"], s["fkdr"], s["wins"], s["final_kills"]
+
+
 # --- ランキング画像生成 ---
 FONT_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "Minecraftia.ttf")
 
@@ -280,6 +291,8 @@ def build_ranking_embed(rows, mode: str):
 @bot.event
 async def on_ready():
     init_db()
+    if not update_ranking_boards.is_running():
+        update_ranking_boards.start()
     try:
         synced = await tree.sync()
         print(f"✅ {len(synced)}個のコマンドを同期しました")
@@ -305,12 +318,13 @@ async def register(interaction: discord.Interaction, mcid: str):
             await interaction.followup.send(f"⚠️ `{official_mcid}` はすでに登録されています。", ephemeral=True)
             return
 
-        star, fkdr, _ = fetch_hypixel_stats(uuid)
-        if star is None:
+        s = await asyncio.to_thread(fetch_ranking_stats, uuid)
+        if s is None:
             await interaction.followup.send("❌ Hypixelからデータを取得できませんでした。", ephemeral=True)
             return
+        star, fkdr, _, _ = s
 
-        register_player(uuid, official_mcid, interaction.user.id, star, fkdr)
+        register_player(uuid, official_mcid, interaction.user.id, *s)
 
         embed = discord.Embed(title="✅ 登録完了", color=0x2ecc71)
         embed.add_field(name="MCID", value=official_mcid, inline=True)
@@ -360,12 +374,13 @@ async def refresh(interaction: discord.Interaction, mcid: str):
             await interaction.followup.send("❌ このMCIDはあなたが登録したものではありません。", ephemeral=True)
             return
 
-        star, fkdr, _ = fetch_hypixel_stats(uuid)
-        if star is None:
+        s = await asyncio.to_thread(fetch_ranking_stats, uuid)
+        if s is None:
             await interaction.followup.send("❌ Hypixelからデータを取得できませんでした。", ephemeral=True)
             return
+        star, fkdr, _, _ = s
 
-        update_stats(uuid, official_mcid, star, fkdr)
+        update_stats(uuid, official_mcid, *s)
 
         embed = discord.Embed(title="🔄 戦績を更新しました", color=0x9b59b6)
         embed.add_field(name="MCID", value=official_mcid, inline=True)
@@ -647,6 +662,101 @@ async def leaderboard(interaction: discord.Interaction, category: app_commands.C
         await interaction.followup.send(file=discord.File(buf, filename="leaderboard.png", description=alt[:1000]))
     except Exception as e:
         await interaction.followup.send(f"⚠️ エラー: {e}")
+
+
+# --- 自動更新ランキング ---
+RANKING_BOARDS = {
+    "fkdr": ("FKDR", lambda r: f"{r['fkdr']:.2f}"),
+    "star": ("Star", lambda r: f"{r['star']:,}"),
+    "wins": ("Wins", lambda r: f"{r['wins']:,}"),
+    "final_kills": ("Final Kills", lambda r: f"{r['final_kills']:,}"),
+}
+BOARDS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "ranking_channels.json")
+
+
+def load_boards() -> dict:
+    """{種類: {"channel": チャンネルID, "message": 投稿ID}}"""
+    try:
+        with open(BOARDS_FILE, encoding="utf-8") as f:
+            return json.load(f)
+    except (FileNotFoundError, ValueError):
+        return {}
+
+
+def save_boards(boards: dict):
+    with open(BOARDS_FILE + ".tmp", "w", encoding="utf-8") as f:
+        json.dump(boards, f)
+    os.replace(BOARDS_FILE + ".tmp", BOARDS_FILE)
+
+
+def refresh_all_registrations():
+    for r in get_all_registrations():
+        try:
+            s = fetch_ranking_stats(r["uuid"])
+            if s:
+                update_stats(r["uuid"], fetch_current_name(r["uuid"]) or r["mcid"], *s)
+        except (requests.RequestException, ValueError) as e:
+            print(f"⚠️ {r['mcid']} の更新に失敗: {e}")
+        time.sleep(1)
+
+
+def build_board_file(kind: str) -> discord.File:
+    label, fmt = RANKING_BOARDS[kind]
+    rows = get_ranking(kind, 10)
+    names = [r["mcid"] for r in rows]
+    heads = [fetch_head(r["uuid"], 64) for r in rows]
+    buf = build_leaderboard_card(f"{label} Ranking", names, heads, [fmt(r) for r in rows])
+    alt = f"{label} ランキング: " + ", ".join(f"{i + 1}. {n} {fmt(r)}" for i, (n, r) in enumerate(zip(names, rows)))
+    return discord.File(buf, filename=f"ranking_{kind}.png", description=alt[:1000])
+
+
+async def post_board(kind: str, entry: dict) -> bool:
+    """ランキングを投稿、または前の投稿を書き換える。投稿IDが変わったら True。"""
+    channel = bot.get_channel(entry["channel"]) or await bot.fetch_channel(entry["channel"])
+    file = await asyncio.to_thread(build_board_file, kind)
+    content = f"🕐 最終更新: <t:{int(time.time())}:R>（1時間ごとに自動更新・ `/register` で参加）"
+    if entry.get("message"):
+        try:
+            await channel.get_partial_message(entry["message"]).edit(content=content, attachments=[file])
+            return False
+        except discord.NotFound:
+            file = await asyncio.to_thread(build_board_file, kind)
+    entry["message"] = (await channel.send(content, file=file)).id
+    return True
+
+
+@tasks.loop(hours=1)
+async def update_ranking_boards():
+    boards = load_boards()
+    if not boards:
+        return
+    await asyncio.to_thread(refresh_all_registrations)
+    changed = False
+    for kind, entry in boards.items():
+        try:
+            changed |= await post_board(kind, entry)
+        except discord.HTTPException as e:
+            print(f"⚠️ {kind} ランキングの投稿に失敗: {e}")
+    if changed:
+        save_boards(boards)
+
+
+@tree.command(name="rankingchannel", description="このチャンネルに自動更新ランキングを投稿します")
+@app_commands.describe(kind="ランキングの種類")
+@app_commands.choices(kind=[app_commands.Choice(name=label, value=k) for k, (label, _) in RANKING_BOARDS.items()])
+@app_commands.default_permissions(manage_channels=True)
+@app_commands.guild_only()
+async def rankingchannel(interaction: discord.Interaction, kind: app_commands.Choice[str]):
+    await interaction.response.defer(ephemeral=True)
+    boards = load_boards()
+    boards[kind.value] = {"channel": interaction.channel_id}
+    try:
+        await post_board(kind.value, boards[kind.value])
+    except discord.HTTPException as e:
+        await interaction.followup.send(f"⚠️ 投稿できませんでした: {e}", ephemeral=True)
+        return
+    save_boards(boards)
+    await interaction.followup.send(f"✅ このチャンネルに {kind.name} ランキングを投稿しました。1時間ごとに更新します。", ephemeral=True)
 
 
 # --- AIチャンネル ---

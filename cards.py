@@ -314,7 +314,7 @@ def build_compare_card(players, fields, mode_label, heads=(None, None)) -> io.By
 
 
 # --- /leaderboard ---
-def build_leaderboard_card(title, names, heads) -> io.BytesIO:
+def build_leaderboard_card(title, names, heads, values=None) -> io.BytesIO:
     n = len(names)
     cols = 1 if n <= 10 else 2
     per_col = -(-n // cols) if n else 1
@@ -342,6 +342,8 @@ def build_leaderboard_card(title, names, heads) -> io.BytesIO:
         if heads[i]:
             paste_rounded(img, heads[i], (x + 88, y + 8), 40, radius=6)
         d.text((x + 146, cy), name, font=font("SemiBold", 27), fill=WHITE, anchor="lm")
+        if values:
+            d.text((x + cw - 24, cy), values[i], font=font("Bold", 27), fill=MEDALS[i] if i < 3 else WHITE, anchor="rm")
     if not names:
         d.text((600, top + 30), "No data", font=font("SemiBold", 28), fill=MUTED, anchor="mm")
     footer(img, W, H)
