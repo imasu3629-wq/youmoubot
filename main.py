@@ -5,6 +5,7 @@ import json
 import requests
 import asyncio
 import time
+import datetime
 from bs4 import BeautifulSoup
 import os
 from pathlib import Path
@@ -783,7 +784,7 @@ async def post_board(entry: dict) -> bool:
     kind = entry["kind"]
     channel = bot.get_channel(entry["channel"]) or await bot.fetch_channel(entry["channel"])
     file = await asyncio.to_thread(build_board_file, kind)
-    content = f"🕐 最終更新: <t:{int(time.time())}:R>（1時間ごとに自動更新）"
+    content = f"🕐 最終更新: <t:{int(time.time())}:R>（毎日0時・日本時間に自動更新）"
     if entry.get("message"):
         try:
             await channel.get_partial_message(entry["message"]).edit(content=content, attachments=[file])
@@ -794,8 +795,17 @@ async def post_board(entry: dict) -> bool:
     return True
 
 
-@tasks.loop(hours=1)
+JST = datetime.timezone(datetime.timedelta(hours=9), "JST")
+update_lock = asyncio.Lock()
+
+
+@tasks.loop(time=datetime.time(0, 0, tzinfo=JST))
 async def update_ranking_boards():
+    async with update_lock:
+        await run_ranking_update()
+
+
+async def run_ranking_update():
     if not load_boards():
         return
     await asyncio.to_thread(refresh_all_registrations)
@@ -837,7 +847,23 @@ async def rankingchannel(interaction: discord.Interaction, kind: app_commands.Ch
                 pass
         boards[key] = entry
         save_boards(boards)
-    await interaction.followup.send(f"✅ このチャンネルに {kind.name} ランキングを投稿しました。1時間ごとに更新します。", ephemeral=True)
+    await interaction.followup.send(f"✅ このチャンネルに {kind.name} ランキングを投稿しました。毎日0時（日本時間）に更新します。", ephemeral=True)
+
+
+@tree.command(name="rankingupdate", description="登録者の戦績を取り直して、ランキングを今すぐ更新します（管理者用）")
+@app_commands.default_permissions(administrator=True)
+@app_commands.guild_only()
+async def rankingupdate(interaction: discord.Interaction):
+    if not interaction.user.guild_permissions.administrator:
+        await interaction.response.send_message("❌ このコマンドは管理者だけが使えます。", ephemeral=True)
+        return
+    if update_lock.locked():
+        await interaction.response.send_message("⏳ ランキングを更新中です。終わるまで待ってください。", ephemeral=True)
+        return
+    await interaction.response.defer(ephemeral=True)
+    async with update_lock:
+        await run_ranking_update()
+    await interaction.followup.send("✅ ランキングを更新しました。", ephemeral=True)
 
 
 # --- パネル ---
