@@ -65,8 +65,8 @@ def fetch_snapshot(uuid: str) -> dict | None:
     return data.get("snapshot") or None
 
 
-def load_card_data(player: dict, uuid: str):
-    """Aurora の player から (PlayerStats, スキン, 細腕か, 全項目あるか) を作る。"""
+def merge_snapshot(player: dict, uuid: str) -> tuple[dict, bool]:
+    """Aurora の player に snapshot を重ねたもの と、全項目あるか を返す。"""
     player = dict(player)
     stats = dict(player.get("stats") or {})
     bw = dict(stats.get("Bedwars") or {})
@@ -80,8 +80,17 @@ def load_card_data(player: dict, uuid: str):
     stats["Bedwars"] = bw
     player["stats"] = stats
     player.setdefault("uuid", uuid)
-    skin, slim = fetch_skin(uuid)
-    return parse_player(player), skin, slim, bool(snapshot and "games_played_bedwars" in snapshot)
+    return player, bool(snapshot and "games_played_bedwars" in snapshot)
+
+
+def card_data(player: dict, full: bool):
+    """merge_snapshot の結果から (PlayerStats, スキン, 細腕か, 全項目あるか) を作る。"""
+    skin, slim = fetch_skin(player["uuid"])
+    return parse_player(player), skin, slim, full
+
+
+def load_card_data(player: dict, uuid: str):
+    return card_data(*merge_snapshot(player, uuid))
 
 
 class Settings:

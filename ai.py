@@ -9,7 +9,7 @@ import discord
 import requests
 
 from bedwars import MODES, extract_bw_stats
-from bwcard_bot import CardView, load_card_data
+from bwcard_bot import CardView, card_data, merge_snapshot
 
 DEEPSEEK_URL = "https://api.deepseek.com/chat/completions"
 DEEPSEEK_KEY = os.environ.get("DEEPSEEK_API_KEY", "")
@@ -106,9 +106,10 @@ def get_bedwars_stats(mcid: str, mode: str = "overall"):
     profile, player, error = lookup_player(mcid, mode)
     if error:
         return {"error": error}, None
+    player, full = merge_snapshot(player, profile["uuid"])
     stats = {k: v for k, v in extract_bw_stats(player, mode).items() if v is not None}
     result = {"mcid": profile["name"], "mode": MODES[mode][0], **stats}
-    return result, (load_card_data(player, profile["uuid"]), mode)
+    return result, (card_data(player, full), mode)
 
 
 def deepseek_reply(messages: list):
