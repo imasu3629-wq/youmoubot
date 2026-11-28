@@ -17,7 +17,7 @@ from database import (
     init_db, get_cached_uuid, save_uuid_cache,
     register_player, update_stats, is_registered, is_registered_by_discord,
     get_registered_by_discord, get_ranking_by_fkdr, get_ranking_by_star,
-    delete_player, get_all_registrations, get_ranking
+    delete_player, get_all_registrations, get_ranking, current_month
 )
 from bedwars import MODES, LEADERBOARDS, COMPARE_FIELDS, extract_bw_stats, find_leaderboard
 from cards import build_compare_card, build_leaderboard_card, fetch_head
@@ -159,12 +159,12 @@ def fetch_hypixel_stats(uuid: str):
 
 
 def fetch_ranking_stats(uuid: str):
-    """ランキング用の (star, fkdr, wins, final_kills)。データが無いときは None。"""
+    """ランキング用の (star, fkdr, wins, final_kills, final_deaths)。データが無いときは None。"""
     p = fetch_hypixel_player(uuid)
     if not p:
         return None
     s = extract_bw_stats(p)
-    return s["star"], s["fkdr"], s["wins"], s["final_kills"]
+    return s["star"], s["fkdr"], s["wins"], s["final_kills"], s["final_deaths"]
 
 
 # --- ランキング画像生成 ---
@@ -300,6 +300,7 @@ async def on_ready():
     bot.add_view(tickets.TicketCloseView())
     if not update_ranking_boards.is_running():
         update_ranking_boards.start()
+        bot.loop.create_task(post_new_boards())
     try:
         synced = await tree.sync()
         print(f"✅ {len(synced)}個のコマンドを同期しました")
@@ -332,7 +333,7 @@ async def register_mcid(mcid: str, discord_id: int):
     s = await asyncio.to_thread(fetch_ranking_stats, uuid)
     if s is None:
         return "❌ Hypixelからデータを取得できませんでした。"
-    star, fkdr, _, _ = s
+    star, fkdr = s[:2]
     if not register_player(uuid, official_mcid, discord_id, *s):
         return f"⚠️ `{official_mcid}` はすでに登録されています。"
     embed = discord.Embed(title="✅ 登録完了", color=0x2ecc71)
@@ -446,7 +447,7 @@ async def refresh(interaction: discord.Interaction, mcid: str):
         if s is None:
             await interaction.followup.send("❌ Hypixelからデータを取得できませんでした。", ephemeral=True)
             return
-        star, fkdr, _, _ = s
+        star, fkdr = s[:2]
 
         update_stats(uuid, official_mcid, *s)
 
@@ -738,6 +739,10 @@ RANKING_BOARDS = {
     "star": ("Star", lambda r: f"{r['star']:,}"),
     "wins": ("Wins", lambda r: f"{r['wins']:,}"),
     "final_kills": ("Final Kills", lambda r: f"{r['final_kills']:,}"),
+    "m_fkdr": ("Monthly FKDR", lambda r: f"{r['value']:.2f}"),
+    "m_star": ("Monthly Star", lambda r: f"+{r['value']:,}"),
+    "m_wins": ("Monthly Wins", lambda r: f"+{r['value']:,}"),
+    "m_final_kills": ("Monthly Final Kills", lambda r: f"+{r['value']:,}"),
 }
 BOARDS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "ranking_channels.json")
 boards_lock = asyncio.Lock()
@@ -785,6 +790,8 @@ async def post_board(entry: dict) -> bool:
     channel = bot.get_channel(entry["channel"]) or await bot.fetch_channel(entry["channel"])
     file = await asyncio.to_thread(build_board_file, kind)
     content = f"🕐 最終更新: <t:{int(time.time())}:R>（毎日0時・日本時間に自動更新）"
+    if kind.startswith("m_"):
+        content += f"\n📅 {current_month()} の記録（毎月1日にリセット）"
     if entry.get("message"):
         try:
             await channel.get_partial_message(entry["message"]).edit(content=content, attachments=[file])
@@ -803,6 +810,21 @@ update_lock = asyncio.Lock()
 async def update_ranking_boards():
     async with update_lock:
         await run_ranking_update()
+
+
+async def post_new_boards():
+    """まだ投稿していないランキング（設定ファイルに直接追加したもの）を投稿する。"""
+    async with boards_lock:
+        boards = load_boards()
+        changed = False
+        for key, entry in boards.items():
+            if not entry.get("message"):
+                try:
+                    changed |= await post_board(entry)
+                except discord.HTTPException as e:
+                    print(f"⚠️ {key} ランキングの投稿に失敗: {e}")
+        if changed:
+            save_boards(boards)
 
 
 async def run_ranking_update(guild_id: int | None = None):
