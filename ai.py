@@ -97,9 +97,10 @@ async def handle_message(bot: discord.Client, message: discord.Message):
         return
     if not DEEPSEEK_KEY:
         return
-    now = time.monotonic()
-    if now - _last_reply.get(message.author.id, 0) < USER_COOLDOWN:
+    now, prev = time.monotonic(), _last_reply.get(message.author.id, 0)
+    if now - prev < USER_COOLDOWN:
         return
+    _last_reply[message.author.id] = now
 
     history = [m async for m in message.channel.history(limit=HISTORY, before=message)][::-1]
     mentioned = bot.user in message.mentions
@@ -109,8 +110,8 @@ async def handle_message(bot: discord.Client, message: discord.Message):
         "new_message": f"{message.author.display_name}: {message.clean_content}",
     }
     if not mentioned and not await asyncio.to_thread(jev_should_reply, state):
+        _last_reply[message.author.id] = prev
         return
-    _last_reply[message.author.id] = now
 
     convo = [
         {"role": "assistant", "content": m.clean_content} if m.author == bot.user
