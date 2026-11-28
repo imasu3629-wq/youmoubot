@@ -644,6 +644,9 @@ async def aichannel(interaction: discord.Interaction):
     msg = "✅ このチャンネルでAIが返事するようにしました。" if on else "⏹️ このチャンネルでのAIの返事を止めました。"
     if on and not ai.DEEPSEEK_KEY:
         msg += "\n⚠️ DEEPSEEK_API_KEY が設定されていないので、今は返事しません。"
+    perms = interaction.app_permissions
+    if on and not (perms.read_message_history and perms.send_messages):
+        msg += "\n⚠️ botにこのチャンネルの「メッセージ履歴を読む」と「メッセージを送信」の権限がないので、返事できません。"
     await interaction.response.send_message(msg, ephemeral=True)
 
 
