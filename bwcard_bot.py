@@ -71,7 +71,9 @@ def load_card_data(player: dict, uuid: str):
     bw = dict(stats.get("Bedwars") or {})
     snapshot = fetch_snapshot(uuid)
     if snapshot:
-        bw.update({k: v for k, v in snapshot.items() if v is not None})
+        played = lambda d: (d.get("wins_bedwars") or 0) + (d.get("losses_bedwars") or 0)  # noqa: E731
+        newer = played(snapshot) >= played(bw)  # 試合数は減らないので、多い方が新しい
+        bw.update({k: v for k, v in snapshot.items() if v is not None and (newer or k not in bw)})
     if not bw.get("Experience"):
         bw["Experience"] = level_to_exp((player.get("achievements") or {}).get("bedwars_level") or 0)
     stats["Bedwars"] = bw
