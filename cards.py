@@ -102,10 +102,18 @@ def make_background(w=1200, h=675) -> Image.Image:
     return Image.alpha_composite(img, shade)
 
 
-def load_background(w, h) -> Image.Image:
-    if os.path.exists(BG_PATH):
-        return ImageOps.fit(Image.open(BG_PATH).convert("RGBA"), (w, h), Image.LANCZOS)
-    return make_background(w, h)
+def load_background(w, h, background=None) -> Image.Image:
+    """/bw のカードと同じ背景（backgrounds/ の写真か和風の背景）。background を渡すとそれを使う。"""
+    from bwcard.designs.wa_bg import background as wa_background
+    from bwcard.gfx import photo_background
+    from bwcard_bot import pick_background
+    if background is None:
+        background = pick_background()
+    if isinstance(background, (str, type(None))):
+        return wa_background(background, w, h)
+    if not isinstance(background, Image.Image):
+        background = Image.open(background)
+    return photo_background(background, w, h)
 
 
 # --- 描画ヘルパー ---
@@ -314,7 +322,7 @@ def build_compare_card(players, fields, mode_label, heads=(None, None)) -> io.By
 
 
 # --- /leaderboard ---
-def build_leaderboard_card(title, names, heads, values=None, start=0, cols=None) -> io.BytesIO:
+def build_leaderboard_card(title, names, heads, values=None, start=0, cols=None, background=None) -> io.BytesIO:
     """start は最初の行の順位-1（2枚目以降は 25 など）。"""
     n = len(names)
     cols = cols or (1 if n <= 10 else 2)
@@ -326,9 +334,9 @@ def build_leaderboard_card(title, names, heads, values=None, start=0, cols=None)
     for i in range(n):
         x = 40 + (i // per_col) * (cw + 20)
         y = top + (i % per_col) * (row_h + gap)
-        fill = (*MEDALS[start + i], 34) if start + i < 3 else (255, 255, 255, 14)
+        fill = (*MEDALS[start + i], 60) if start + i < 3 else (12, 14, 32, 170)
         boxes.append((x, y, x + cw, y + row_h, fill))
-    img = panels(load_background(W, H), boxes, radius=16)
+    img = panels(load_background(W, H, background), boxes, radius=16)
     d = ImageDraw.Draw(img)
 
     d.text((44, 84), "HYPIXEL BEDWARS LEADERBOARD", font=font("SemiBold", 24), fill=MUTED, anchor="ls")
