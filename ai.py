@@ -184,9 +184,9 @@ async def handle_message(bot: discord.Client, message: discord.Message):
             print(f"⚠️ DeepSeek エラー: {e}")
             text, card = "⚠️ AIの返事を作れませんでした。少ししてからもう一度試してください。", None
         extra = {}
-        if card:
+        if card and message.channel.permissions_for(message.guild.me).attach_files:
             view = CardView(message.author.id, *card)
             extra = {"file": await view.render(), "view": view}
     sent = await message.reply(text[:2000] or "…", mention_author=False, allowed_mentions=discord.AllowedMentions.none(), **extra)
-    if card:
+    if extra:
         view.message = sent
