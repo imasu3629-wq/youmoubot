@@ -1,0 +1,11 @@
+settings.json
+settings.tmp
+__pycache__/
+ai_channels.json
+ai_channels.tmp
+ranking_channels.json
+ranking_channels.json.tmp
+tickets.json
+tickets.json.tmp
+approval_channels.json
+approval_channels.tmp
