@@ -1,4 +1,4 @@
-"""bwcard の統計カードを Aurora のデータで出すための部品（/bw と /bwsettings 用）。"""
+"""bwcard の統計カードを Aurora のデータで出すための部品（/bw と /config 用）。"""
 from __future__ import annotations
 import asyncio
 import base64
@@ -153,9 +153,9 @@ class ResetButton(discord.ui.Button):
 
 
 class SettingsView(discord.ui.View):
-    def __init__(self, user_id: int, on_change=None):
+    def __init__(self, user_id: int):
         super().__init__(timeout=300)
-        self.user_id, self.on_change = user_id, on_change
+        self.user_id = user_id
         self._rebuild()
 
     def _rebuild(self):
@@ -173,8 +173,6 @@ class SettingsView(discord.ui.View):
     async def saved(self, interaction: discord.Interaction):
         self._rebuild()
         await interaction.response.edit_message(content=f"✅ 保存しました。\n{self.summary()}", view=self)
-        if self.on_change:
-            await self.on_change()
 
 
 class ModeSelect(discord.ui.Select):
@@ -185,15 +183,6 @@ class ModeSelect(discord.ui.Select):
 
     async def callback(self, interaction: discord.Interaction):
         await self.view.update(interaction, mode=self.values[0])
-
-
-class SettingsButton(discord.ui.Button):
-    def __init__(self):
-        super().__init__(label="表示する項目", emoji="⚙️", style=discord.ButtonStyle.secondary, row=1)
-
-    async def callback(self, interaction: discord.Interaction):
-        sv = SettingsView(interaction.user.id, on_change=self.view.redraw)
-        await interaction.response.send_message(sv.summary(), view=sv, ephemeral=True)
 
 
 class CardView(discord.ui.View):
@@ -208,12 +197,11 @@ class CardView(discord.ui.View):
     def _rebuild(self):
         self.clear_items()
         self.add_item(ModeSelect(self))
-        self.add_item(SettingsButton())
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         if interaction.user.id != self.owner_id:
             await interaction.response.send_message(
-                "切り替えはコマンドを使った人だけができます。自分のカードに出す項目は /bwsettings で選べます。",
+                "切り替えはコマンドを使った人だけができます。自分のカードに出す項目は /config で選べます。",
                 ephemeral=True)
             return False
         return True
@@ -227,14 +215,6 @@ class CardView(discord.ui.View):
         await interaction.response.defer()
         async with self._lock:
             await interaction.edit_original_response(attachments=[await self.render()], view=self)
-
-    async def redraw(self):
-        if self.message:
-            async with self._lock:
-                try:
-                    await self.message.edit(attachments=[await self.render()], view=self)
-                except discord.HTTPException:
-                    pass
 
     async def on_timeout(self):
         for item in self.children:

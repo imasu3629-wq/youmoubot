@@ -536,8 +536,8 @@ async def bw(interaction: discord.Interaction, mcid: str, mode: app_commands.Cho
         await interaction.followup.send(f"⚠️ エラー: {e}")
 
 
-@tree.command(name="bwsettings", description="/bw のカードに表示する項目を選びます")
-async def bwsettings(interaction: discord.Interaction):
+@tree.command(name="config", description="/bw のカードに表示する項目を設定します")
+async def config(interaction: discord.Interaction):
     sv = SettingsView(interaction.user.id)
     await interaction.response.send_message(sv.summary(), view=sv, ephemeral=True)
 
